@@ -130,8 +130,10 @@ The examples call the shim by its full path because terminals started with
 `hc run`, and templates, look up commands in the herdr-core server's `PATH`,
 not in your shell's. The server keeps the `PATH` it had when it started. If
 it started before you put `~/.local/bin` first, a bare `bob` runs the real
-Bob, without the shim. `hc server restart` loads your current `PATH`, but it
-also ends every program running in hc terminals.
+Bob, without the shim. `hc server restart`, run from a shell with your
+current `PATH`, gives the server that `PATH`; running terminals and their
+programs keep going. The server takes the whole environment of the shell
+that restarts it.
 
 Panes in the Herdr app run your shell, which sets its own `PATH`, so a bare
 `bob` works there.
