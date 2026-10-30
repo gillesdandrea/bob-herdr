@@ -1,0 +1,192 @@
+#!/bin/sh
+# bob shim from bob-herdr. Runs the real Bob and, inside an hc terminal:
+# reports `idle` once Bob's input box is on screen, types a prompt given as
+# arguments into it (`bob "fix the tests"`), and clears the status on exit.
+
+self=$(realpath "$0")
+root=$(dirname "$(dirname "$self")")
+. "$root/lib/status.sh"
+
+# The marker on line 2 of this file. Bob's own entry point is megabytes of
+# minified code on a few lines, so only the first bytes are read.
+is_shim() {
+  head -c 512 "$1" 2>/dev/null | grep -q 'bob shim from bob-herdr'
+}
+
+# The first bob on PATH that is not a bob-herdr shim, copies included.
+real_bob() {
+  if [ -n "${BOB_HERDR_BOB:-}" ]; then
+    if is_shim "$BOB_HERDR_BOB"; then
+      echo "bob-herdr: BOB_HERDR_BOB is a bob-herdr shim; point it at the real Bob" >&2
+      return 1
+    fi
+    printf '%s\n' "$BOB_HERDR_BOB"
+    return
+  fi
+  old_ifs=$IFS
+  IFS=:
+  for dir in $PATH; do
+    [ -n "$dir" ] && [ -f "$dir/bob" ] && [ -x "$dir/bob" ] || continue
+    is_shim "$dir/bob" && continue
+    IFS=$old_ifs
+    printf '%s\n' "$dir/bob"
+    return
+  done
+  IFS=$old_ifs
+  echo "bob-herdr: no bob found on PATH, apart from the bob-herdr shim" >&2
+  return 1
+}
+
+bob=$(real_bob) || exit 127
+
+# Bob's headless and management commands, and help or version anywhere,
+# run as they are.
+case ${1:-} in
+  run | mcp | acp | --list-tasks | --show-license) exec "$bob" "$@" ;;
+esac
+for arg do
+  case $arg in
+    -p | --prompt | --prompt=* | -h | --help | -v | --version) exec "$bob" "$@" ;;
+  esac
+done
+
+# With `--`, everything before it goes to Bob untouched and everything after
+# it is the prompt. Without it, words that are neither options, the values of
+# Bob 2.0.9's options, nor a leading `chat` are the prompt. The loop walks the
+# original arguments and keeps Bob's in "$@".
+prompt=
+value=
+first=1
+split=
+rest=
+for arg do
+  [ "$arg" = -- ] && split=1
+done
+for arg do
+  shift
+  if [ -n "$rest" ]; then
+    prompt="${prompt:+$prompt }$arg"
+    continue
+  fi
+  if [ -n "$split" ]; then
+    if [ "$arg" = -- ]; then rest=1; else set -- "$@" "$arg"; fi
+    continue
+  fi
+  if [ "$value" = 1 ]; then
+    value=
+    set -- "$@" "$arg"
+    continue
+  fi
+  if [ "$value" = resume ]; then
+    value=
+    # A task id is 32 hex digits; anything else is not -r's value.
+    case $arg in
+      *[!0-9a-f]* | '') ;;
+      *) if [ ${#arg} -eq 32 ]; then set -- "$@" "$arg"; continue; fi ;;
+    esac
+  fi
+  case $arg in
+    --instance-id | -w | --workspace | --mode | --max-cost | --max-turns | --log-level | --team-id | --disable-tool-groups)
+      value=1
+      set -- "$@" "$arg"
+      ;;
+    -r | --resume)
+      value=resume
+      set -- "$@" "$arg"
+      ;;
+    -*) set -- "$@" "$arg" ;;
+    chat)
+      if [ -n "$first" ]; then set -- "$@" "$arg"; else prompt="${prompt:+$prompt }$arg"; fi
+      ;;
+    *) prompt="${prompt:+$prompt }$arg" ;;
+  esac
+  first=
+done
+
+# Typing a prompt in needs hc; reporting needs status_enabled. Either one
+# needs the helper below.
+in_hc=
+[ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1 && in_hc=1
+if [ -z "$in_hc" ]; then
+  [ -n "$prompt" ] && echo "bob-herdr: Bob starts without your prompt: typing it in needs an hc terminal with hc on PATH" >&2
+  status_enabled || exec "$bob" "$@"
+fi
+
+# The helper and the shim share a folder: `pid` holds Bob's process id, and
+# `exited` appears once Bob has exited. The helper checks both before each
+# report or send, so it never acts for a Bob that is gone.
+state=$(mktemp -d "${TMPDIR:-/tmp}/bob-herdr.XXXXXX")
+bob_alive() {
+  [ ! -e "$state/exited" ] && [ -s "$state/pid" ] && kill -0 "$(cat "$state/pid")" 2>/dev/null
+}
+# Bob is busy, so the message goes in the status, not on the screen.
+note() {
+  bob_alive || return 0
+  status_enabled && report "state=idle:app=bob:msg=$(printf 'bob-herdr: %s' "$1" | base64 | tr -d '\n')"
+}
+
+helper=
+if [ -n "$in_hc" ]; then
+  term=$HC_TERMINAL_ID
+  (
+    trap '' INT
+    # Without HC_TERMINAL_ID, hc acts for nobody: a message to this terminal
+    # does not end the wait, and the prompt is not tagged as sent by it.
+    # Piped, not captured: hc stays a direct child, which the shim kills when
+    # Bob exits. A timeout also exits 0, hence the reason check.
+    if ! env -u HC_TERMINAL_ID hc wait "$term" --json \
+      --output "${BOB_HERDR_READY_TEXT:-/ for commands}" \
+      --timeout "${BOB_HERDR_READY_TIMEOUT:-600}" 2>/dev/null |
+      grep -q '"reason":"output"'; then
+      [ -z "$prompt" ] || note "Bob's input box did not appear, so your first prompt was not typed in"
+      exit 0
+    fi
+    bob_alive || exit 0
+    if [ -z "$prompt" ]; then
+      # Without a prompt, Bob now waits for you: report it. With one, stay
+      # silent: Bob's hook reports working once the prompt is in, and an idle
+      # report now would end an `hc wait` before Bob has the prompt.
+      status_enabled && report "state=idle:app=bob"
+      exit 0
+    fi
+    # hc send can wait for you to stop typing; as a direct child, it dies
+    # with the helper if Bob exits meanwhile.
+    if ! env -u HC_TERMINAL_ID hc send "$term" -- "$prompt" >/dev/null 2>"$state/send.err"; then
+      note "your first prompt was not typed in: $(head -c 200 "$state/send.err")"
+    fi
+  ) &
+  helper=$!
+  # `hc wait --output` only sees output printed after it starts listening.
+  # Bob takes over a second to draw its input box; this head start covers
+  # the time hc needs to connect.
+  sleep 0.3
+fi
+
+# Bob runs in the background so the shim knows its process id. Its stdin is
+# the terminal (saved in fd 3), not the /dev/null a background job gets.
+exec 3<&0
+"$bob" "$@" <&3 3<&- &
+bob_pid=$!
+exec 3<&-
+echo "$bob_pid" >"$state/pid"
+
+# TERM and HUP for the shim go to Bob; the cleanup below runs once Bob exits.
+# Ctrl-C reaches Bob directly, as it shares the terminal's process group.
+trap 'kill -TERM "$bob_pid" 2>/dev/null' TERM
+trap 'kill -HUP "$bob_pid" 2>/dev/null' HUP
+trap : INT
+while :; do
+  wait "$bob_pid"
+  rc=$?
+  kill -0 "$bob_pid" 2>/dev/null || break
+done
+
+: >"$state/exited"
+if [ -n "$helper" ]; then
+  pkill -P "$helper" 2>/dev/null
+  kill "$helper" 2>/dev/null
+  wait "$helper" 2>/dev/null
+fi
+status_enabled && report "state=clear"
+rm -rf "$state"
+exit $rc

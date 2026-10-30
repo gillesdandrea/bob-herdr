@@ -1,0 +1,145 @@
+#!/bin/sh
+# bob-herdr: OSC 7501 status for IBM Bob, and Bob in the Herdr app.
+set -eu
+
+self=$(realpath "$0")
+root=$(dirname "$(dirname "$self")")
+. "$root/lib/status.sh"
+
+bin_dir=${BOB_HERDR_BIN_DIR:-$HOME/.local/bin}
+bob_settings=${BOB_HERDR_BOB_SETTINGS:-$HOME/.bob/settings/settings.json}
+app_home=${BOB_HERDR_APP_HOME:-$HOME/.config/herdr-app}
+config() { node "$root/lib/config.mjs" "$@"; }
+
+usage() {
+  cat <<EOF
+Usage: bob-herdr <command>
+
+Commands:
+  install     Link bob-herdr and the bob shim into $bin_dir, add the
+              status hooks to Bob's settings, and add Bob to the Herdr app
+  uninstall   Remove what install added
+  status      Show what is installed and which bob runs
+  hook        Report a Bob hook event as OSC 7501 (Bob runs this)
+EOF
+}
+
+# Bob's hooks: a submitted prompt is working, a finished turn is done. Event
+# JSON arrives on stdin. Idle comes from the shim: Bob runs its SessionStart
+# hook at the first prompt, not at launch.
+hook() {
+  input=$(cat)
+  status_enabled || return 0
+  event=$(printf '%s' "$input" | sed -n 's/.*"hook_event_name":"\([A-Za-z]*\)".*/\1/p')
+  case $event in
+    UserPromptSubmit) state=working ;;
+    Stop) state=done ;;
+    *) return 0 ;;
+  esac
+  report "state=$state:app=bob"
+}
+
+# Bob's mascot from an installed IBM Bob IDE, else our own glyph.
+icon_source() {
+  for app in "$HOME"/Applications/IBM\ Bob*.app /Applications/IBM\ Bob*.app; do
+    svg="$app/Contents/Resources/app/out/media/code-icon.svg"
+    if [ -f "$svg" ]; then
+      printf '%s\n' "$svg"
+      return
+    fi
+  done
+  printf '%s\n' "$root/share/bob.svg"
+}
+
+# Links $bin_dir/<name> to bin/<name> here. A broken link is replaced; a
+# file or a working link to anything else is left alone.
+link() {
+  name=$1
+  target="$root/bin/$name"
+  dest="$bin_dir/$name"
+  if [ -e "$dest" ] && [ "$(realpath "$dest")" != "$target" ]; then
+    echo "Skipped $dest: it is not a bob-herdr link. Remove it and run install again."
+    return
+  fi
+  ln -sfn "$target" "$dest"
+  echo "Linked $dest"
+}
+
+unlink_ours() {
+  dest="$bin_dir/$1"
+  if [ -L "$dest" ] && [ "$(realpath "$dest" 2>/dev/null)" = "$root/bin/$1" ]; then
+    rm "$dest"
+    echo "Removed $dest"
+  fi
+}
+
+install() {
+  mkdir -p "$bin_dir"
+  link bob-herdr
+  link bob
+  if [ "$(command -v bob 2>/dev/null || :)" != "$bin_dir/bob" ]; then
+    echo "Warning: bob runs $(command -v bob 2>/dev/null || echo nothing), not the shim. Put $bin_dir ahead of it on PATH."
+  fi
+
+  # The hooks call this clone directly, so they work even if a link was
+  # skipped.
+  config hooks-add "$bob_settings" "\"$root/bin/bob-herdr\" hook"
+  echo "Added the status hooks to $bob_settings"
+
+  if [ -d "$app_home" ]; then
+    icon=$(icon_source)
+    tint=false
+    [ "$icon" = "$root/share/bob.svg" ] && tint=true
+    mkdir -p "$app_home/bob-herdr"
+    cp "$icon" "$app_home/bob-herdr/bob.svg"
+    # The full path: the app starts agents through herdr-core, whose PATH
+    # may predate yours and find the real Bob first.
+    config program-add "$app_home/programs.json" bob-herdr/bob.svg "$tint" "$bin_dir/bob"
+    echo "Added IBM Bob to $app_home/programs.json"
+  else
+    echo "Skipped the Herdr app: $app_home does not exist"
+  fi
+}
+
+uninstall() {
+  unlink_ours bob
+  unlink_ours bob-herdr
+  config hooks-remove "$bob_settings"
+  echo "Removed the status hooks from $bob_settings"
+  if [ -d "$app_home" ]; then
+    config program-remove "$app_home/programs.json"
+    rm -rf "$app_home/bob-herdr"
+    echo "Removed IBM Bob from $app_home/programs.json"
+  fi
+}
+
+status() {
+  for name in bob-herdr bob; do
+    dest="$bin_dir/$name"
+    if [ -L "$dest" ] && [ "$(realpath "$dest" 2>/dev/null)" = "$root/bin/$name" ]; then
+      echo "$name: linked at $dest"
+    else
+      echo "$name: not linked"
+    fi
+  done
+  echo "bob runs: $(command -v bob 2>/dev/null || echo nothing)"
+  echo "Status hooks in $bob_settings: $(config hooks-count "$bob_settings") of 2"
+  if [ -d "$app_home" ]; then
+    entry=$(config program-show "$app_home/programs.json")
+    echo "Herdr app entry: ${entry:-none}"
+  else
+    echo "Herdr app: not installed"
+  fi
+}
+
+case ${1:-} in
+  install) install ;;
+  uninstall) uninstall ;;
+  status) status ;;
+  hook) hook ;;
+  -h | --help | help) usage ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
