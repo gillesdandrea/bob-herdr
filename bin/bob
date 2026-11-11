@@ -1,7 +1,8 @@
 #!/bin/sh
 # bob shim from bob-herdr. Runs the real Bob and, inside an hc terminal:
 # reports `idle` once Bob's input box is on screen, unless Bob starts with a
-# prompt (`bob "fix the tests"`), and clears the status on exit.
+# prompt (`bob "fix the tests"`), where it reports a sign-in screen as
+# `blocked` instead, and clears the status on exit.
 
 self=$(realpath "$0")
 root=$(dirname "$(dirname "$self")")
@@ -39,10 +40,11 @@ real_bob() {
 
 bob=$(real_bob) || exit 127
 
-# Help, version, a headless prompt and Bob's listings, anywhere, run as they
-# are.
+# Help, version, a headless prompt and Bob's listings, anywhere before `--`,
+# run as they are.
 for arg do
   case $arg in
+    --) break ;;
     -p | --prompt | --prompt=* | -h | --help | -v | --version | --list-tasks | --list-tasks=* | --show-license)
       exec "$bob" "$@"
       ;;
@@ -101,16 +103,25 @@ done
 
 status_enabled || exec "$bob" "$@"
 
-# Without a prompt, a helper reports idle once Bob's input box is on screen,
-# which needs hc. With a prompt, nothing is reported here: Bob's hook reports
-# working once Bob has the prompt, and an idle report before that would end
-# an `hc wait` early.
+# A helper watches Bob's screen through hc while Bob starts.
+#
+# Without a prompt, it reports idle once Bob's input box is on screen. With a
+# prompt, idle would end an `hc wait` early, and Bob's hook reports working
+# once Bob has the prompt. Until then Bob may stop at its sign-in screen: the
+# helper reports that as blocked. Only with a prompt, which Bob itself sends
+# after sign-in: herdr-core drops a template's first message when the first
+# status is blocked.
 #
 # The helper and the shim share a folder: `pid` holds Bob's process id, and
 # `exited` appears once Bob has exited. The helper checks both before it
 # reports, so it never reports for a Bob that is gone.
 state=
 helper=
+ready=${BOB_HERDR_READY_TEXT:-/ for commands}
+signin=${BOB_HERDR_SIGNIN_TEXT:-Complete sign-in in your browser|in your browser to sign in}
+bob_alive() {
+  [ ! -e "$state/exited" ] && [ -s "$state/pid" ] && kill -0 "$(cat "$state/pid")" 2>/dev/null
+}
 stop_helper() {
   if [ -n "$helper" ]; then
     : >"$state/exited"
@@ -120,29 +131,65 @@ stop_helper() {
   fi
   [ -z "$state" ] || rm -rf "$state"
 }
-if [ -z "$prompt" ] && [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
+if [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
   # Until Bob runs, Ctrl-C ends the shim: the helper must not outlive it.
   trap 'stop_helper; exit 130' INT
   state=$(mktemp -d "${TMPDIR:-/tmp}/bob-herdr.XXXXXX")
   term=$HC_TERMINAL_ID
-  (
-    trap '' INT
-    # Without HC_TERMINAL_ID, hc acts for nobody: a message to this terminal
-    # does not end the wait. Piped, not captured: hc stays a direct child,
-    # which the shim kills when Bob exits. A timeout also exits 0, hence the
-    # reason check.
-    env -u HC_TERMINAL_ID hc wait "$term" --json \
-      --output "${BOB_HERDR_READY_TEXT:-/ for commands}" \
-      --timeout "${BOB_HERDR_READY_TIMEOUT:-600}" 2>/dev/null |
-      grep -q '"reason":"output"' || exit 0
-    [ ! -e "$state/exited" ] && [ -s "$state/pid" ] && kill -0 "$(cat "$state/pid")" 2>/dev/null || exit 0
-    report "state=idle:app=bob"
-  ) 2>/dev/null &
-  helper=$!
-  # `hc wait --output` only sees output printed after it starts listening.
-  # Bob takes over a second to draw its input box; this head start covers
-  # the time hc needs to connect.
-  sleep 0.3
+  # Without HC_TERMINAL_ID, hc acts for nobody: a message to this terminal
+  # does not end a wait.
+  if [ -z "$prompt" ]; then
+    (
+      trap '' INT
+      # Piped, not captured: hc stays a direct child, which the shim kills
+      # when Bob exits. A timeout also exits 0, hence the reason check.
+      env -u HC_TERMINAL_ID hc wait "$term" --json --output "$ready" \
+        --timeout "${BOB_HERDR_READY_TIMEOUT:-600}" 2>/dev/null |
+        grep -q '"reason":"output"' || exit 0
+      bob_alive || exit 0
+      report "state=idle:app=bob"
+    ) 2>/dev/null &
+    helper=$!
+    # `hc wait --output` only sees output printed after it starts listening.
+    # Bob takes over a second to draw its input box; this head start covers
+    # the time hc needs to connect.
+    sleep 0.3
+  else
+    (
+      trap '' INT
+      # The sign-in screen never comes once the input box is up, so the
+      # helper looks about once a second until then. An earlier program may
+      # have left either text on the screen: the first look comes before
+      # Bob draws, and if it shows one of them, nothing counts until a look
+      # shows neither, which is Bob clearing the screen.
+      fresh=
+      tries=0
+      while [ "$tries" -lt "${BOB_HERDR_READY_TIMEOUT:-600}" ] && [ ! -e "$state/exited" ]; do
+        tries=$((tries + 1))
+        screen=$(env -u HC_TERMINAL_ID hc read "$term" --lines 40 2>/dev/null)
+        found=
+        case $screen in
+          *"$ready"*) found=ready ;;
+        esac
+        [ -n "$found" ] || ! printf '%s' "$screen" | grep -Eq "$signin" || found=signin
+        if [ -z "$fresh" ]; then
+          if [ -n "$found" ]; then
+            sleep 0.3
+            continue
+          fi
+          fresh=1
+        fi
+        [ "$found" != ready ] || exit 0
+        if [ "$found" = signin ]; then
+          bob_alive || exit 0
+          report "state=blocked:kind=auth:app=bob:msg=$(printf 'Sign in to Bob in your browser' | base64 | tr -d '\n')"
+          exit 0
+        fi
+        sleep 1
+      done
+    ) 2>/dev/null &
+    helper=$!
+  fi
 fi
 
 # Bob runs in the background so the shim knows its process id. Its stdin is

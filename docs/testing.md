@@ -35,12 +35,12 @@ Expect:
 
 - both links;
 - `bob runs:` pointing at the shim in `~/.local/bin`;
-- `Status hooks ...: 2 of 2`;
+- `Status hooks ...: 7 of 7`;
 - a Herdr app entry whose `run` is the shim's full path.
 
 If `bob runs:` is not the shim, stop and report the `PATH` order.
 
-Run `bin/bob-herdr install` a second time. `status` must still say `2 of 2`.
+Run `bin/bob-herdr install` a second time. `status` must still say `7 of 7`.
 
 ## 2. Status and first prompt
 
@@ -52,7 +52,7 @@ hc wait bh-status --json --timeout 120
 The wait must end with `"reason":"status"` and `"status":"done"`, not
 `idle`: with a prompt, the shim reports nothing until Bob has it. Poll
 `hc get bh-status --json` once more: `.status` is `done` with
-`"app":"bob"`.
+`"app":"bob"` and a `msg` that is the first line of Bob's reply.
 
 If Bob asks whether to trust the folder, `hc read bh-status` shows the
 question. Answer with `hc keys bh-status enter` and keep polling.
@@ -111,21 +111,44 @@ The `hc run` output must show `"first_message":{"sent":true,...}`, and the
 status must reach `done` with a one-word answer. Then delete
 `~/.config/herdr-core/templates/bh-bob.md`.
 
-## 7. Known limitations
+## 7. Blocked status
+
+One terminal covers an approval, a question and `/clear`:
+
+```sh
+hc run --bg --name bh-blocked ~/.local/bin/bob "Use your shell tool to run: touch bh-probe.txt"
+hc wait bh-blocked --json --timeout 120
+```
+
+- **Approval:** the wait must end with `"status":"blocked"`.
+  `hc get bh-blocked --json` shows `"kind":"permission"` and a `msg` that
+  starts with `execute_command: touch bh-probe.txt`. Reject with
+  `hc keys bh-blocked esc`: the status becomes `working`, then `done`. If
+  Bob runs the command without asking, the person's settings approve it:
+  skip this check and say so.
+- **Question:** run
+  `hc send bh-blocked "Use your ask_followup_question tool to ask me one question: apple or pear?"`,
+  then the same `hc wait`. It must end with `"status":"blocked"`, and
+  `hc get` shows `"kind":"question"` with the question as `msg`. Answer with
+  `hc keys bh-blocked enter`: the status becomes `working`, then `done`.
+- **`/clear`:** run `hc send bh-blocked "/clear"`. Within 15 seconds the
+  status is `idle`.
+
+Not covered: the sign-in screen, which needs a Bob that is signed out. With
+one, `hc run --bg --name bh-auth ~/.local/bin/bob "hello"` then `hc wait`
+ends with `"status":"blocked"` and `"kind":"auth"`.
+
+## 8. Known limitations
 
 These checks confirm the documented behavior, so that a Bob release that
 changes it gets noticed.
 
-- **Permission prompt:** run
-  `hc run --bg --name bh-perm ~/.local/bin/bob "Use your shell tool to run: touch bh-probe.txt"`.
-  While Bob waits for approval, the status is `working`, never `blocked`.
-  Deny with `hc keys bh-perm esc`.
 - **Cancel:** run
   `hc run --bg --name bh-cancel ~/.local/bin/bob "Write a 600-word essay about lighthouses"`.
   Once the status is `working`, run `hc keys bh-cancel esc`. The status stays
   `working`.
 
-## 8. Clean up
+## 9. Clean up
 
 Kill and remove every `bh-*` terminal with `hc kill`, then `hc rm`. Delete
 `bh-probe.txt` if Bob created it. Leave bob-herdr installed unless the person

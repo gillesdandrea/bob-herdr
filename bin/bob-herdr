@@ -2,9 +2,26 @@
 # bob-herdr: OSC 7501 status for IBM Bob, and Bob in the Herdr app.
 set -eu
 
+# Bob's hooks: a submitted prompt is working, an approval prompt or a
+# question is blocked, a finished turn is done, `/clear` is idle. Idle at
+# launch comes from the shim: Bob runs its SessionStart hook before its input
+# box is ready, and also when it starts with a prompt. Bob runs `hook` on
+# every event and waits for it, so this runs before anything else here: it
+# starts no process when reports are off, and only node when they are on.
+# Bob's settings call this file by its own path, so a link is rare.
+if [ "${1:-}" = hook ]; then
+  if [ -L "$0" ]; then self=$(realpath "$0"); else self=$0; fi
+  case $self in
+    */*) lib=${self%/*}/../lib ;;
+    *) lib=../lib ;;
+  esac
+  . "$lib/status.sh"
+  status_enabled || exit 0
+  exec node "$lib/hook.mjs"
+fi
+
 self=$(realpath "$0")
 root=$(dirname "$(dirname "$self")")
-. "$root/lib/status.sh"
 
 bin_dir=${BOB_HERDR_BIN_DIR:-$HOME/.local/bin}
 bob_settings=${BOB_HERDR_BOB_SETTINGS:-$HOME/.bob/settings/settings.json}
@@ -24,30 +41,15 @@ Commands:
 EOF
 }
 
-# Bob's hooks: a submitted prompt is working, a finished turn is done. Event
-# JSON arrives on stdin. Idle comes from the shim: Bob runs its SessionStart
-# hook before its input box is ready, and also when it starts with a prompt.
-hook() {
-  input=$(cat)
-  status_enabled || return 0
-  event=$(printf '%s' "$input" | sed -n 's/.*"hook_event_name":"\([A-Za-z]*\)".*/\1/p')
-  case $event in
-    UserPromptSubmit) state=working ;;
-    Stop) state=done ;;
-    *) return 0 ;;
-  esac
-  report "state=$state:app=bob"
-}
-
 # Sets bob_version to what `bob --version` prints, empty when bob does not
 # run, and succeeds when that is older than 2.1.0, the first Bob that takes
 # a prompt as an argument.
 bob_too_old() {
-  bob_version=$(bob --version 2>/dev/null | sed -n '1s/^\([0-9][0-9]*\.[0-9][0-9]*\).*/&/p')
+  bob_version=$(bob --version 2>/dev/null | sed -n '1s/^\([0-9][0-9]*\.[0-9][0-9.]*\).*/\1/p')
   [ -n "$bob_version" ] || return 1
   major=${bob_version%%.*}
   minor=${bob_version#*.}
-  minor=${minor%%[!0-9]*}
+  minor=${minor%%.*}
   [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt 1 ]; }
 }
 
@@ -92,14 +94,16 @@ install() {
   if [ "$(command -v bob 2>/dev/null || :)" != "$bin_dir/bob" ]; then
     echo "Warning: bob runs $(command -v bob 2>/dev/null || echo nothing), not the shim. Put $bin_dir ahead of it on PATH."
   fi
-  if bob_too_old; then
-    echo "Warning: Bob $bob_version is older than 2.1.0, which bob-herdr needs. Update Bob."
-  fi
 
   # The hooks call this clone directly, so they work even if a link was
-  # skipped.
-  config hooks-add "$bob_settings" "\"$root/bin/bob-herdr\" hook"
-  echo "Added the status hooks to $bob_settings"
+  # skipped. An older Bob does not know all their events, and Bob ignores
+  # every hook in a settings file that names an event it does not know.
+  if bob_too_old; then
+    echo "Skipped the status hooks: Bob $bob_version is older than 2.1.0, which bob-herdr needs. Update Bob and run install again."
+  else
+    config hooks-add "$bob_settings" "\"$root/bin/bob-herdr\" hook"
+    echo "Added the status hooks to $bob_settings"
+  fi
 
   if [ -d "$app_home" ]; then
     icon=$(icon_source)
@@ -143,7 +147,7 @@ status() {
   else
     echo "Bob version: ${bob_version:-unknown}"
   fi
-  echo "Status hooks in $bob_settings: $(config hooks-count "$bob_settings") of 2"
+  echo "Status hooks in $bob_settings: $(config hooks-count "$bob_settings")"
   if [ -d "$app_home" ]; then
     entry=$(config program-show "$app_home/programs.json")
     echo "Herdr app entry: ${entry:-none}"
@@ -156,7 +160,6 @@ case ${1:-} in
   install) install ;;
   uninstall) uninstall ;;
   status) status ;;
-  hook) hook ;;
   -h | --help | help) usage ;;
   *)
     usage >&2
