@@ -13,8 +13,8 @@ touch other terminals, and never stop or restart the herdr-core server.
 - `echo $HC_TERMINAL_ID` prints a terminal address, so you are in an hc
   terminal.
 - `hc --version` and `herdr-app status` work.
-- `bob --version` prints a version. If it fails, stop and ask the person to
-  fix their Bob install.
+- `bob --version` prints 2.1.0 or later. If it fails or prints an earlier
+  version, stop and ask the person to fix their Bob install.
 
 Terminals started with `hc run`, and templates, look up commands in the
 herdr-core server's `PATH`, which can be older than yours. The steps call the
@@ -57,8 +57,7 @@ The wait must end with `"reason":"status"` and `"status":"done"`, not
 If Bob asks whether to trust the folder, `hc read bh-status` shows the
 question. Answer with `hc keys bh-status enter` and keep polling.
 
-`hc read bh-status` must show the prompt once, with no `<hc>` tag, and the
-answer PINEAPPLE.
+`hc read bh-status` must show the prompt once and the answer PINEAPPLE.
 
 ## 3. Exit clears the status
 
@@ -70,22 +69,10 @@ hc keys bh-status ctrl+c
 After a few seconds, `hc get bh-status --json` must show `"status":null`, and
 `pgrep -fl 'hc wait'` must show no wait for that terminal.
 
-## 4. Exit before Bob is ready
+Not covered: a Bob that exits before its input box appears. The shim then
+reports nothing, but that moment is too short to hit reliably in a test.
 
-The shell stays after Bob exits, so a prompt typed too late would land in it:
-
-```sh
-hc run --bg --name bh-early sh -c '~/.local/bin/bob "echo LEAKED"; exec sh'
-sleep 1
-hc keys bh-early ctrl+c
-hc keys bh-early ctrl+c
-```
-
-Wait 15 seconds. `hc read bh-early` must not show `echo LEAKED` typed at the
-shell prompt or `LEAKED` printed on its own line. `pgrep -fl 'hc wait'` must
-show no wait for that terminal.
-
-## 5. The app shows Bob (person)
+## 4. The app shows Bob (person)
 
 ```sh
 hc run --bg --name bh-app ~/.local/bin/bob
@@ -99,13 +86,13 @@ tab shows the same icon.
 Then ask them to type a short prompt in it, switch to another tab before Bob
 finishes, and confirm that the done notification appears.
 
-## 6. Start an agent (person)
+## 5. Start an agent (person)
 
 Ask the person to choose **+ → Start an agent → IBM Bob** with the task
 `Reply with the single word BANANA`. Find the new terminal with `hc ls`, then
 check it as in step 2: it reaches `done` and answers BANANA.
 
-## 7. A herdr-core template
+## 6. A herdr-core template
 
 ```sh
 mkdir -p ~/.config/herdr-core/templates
@@ -124,7 +111,7 @@ The `hc run` output must show `"first_message":{"sent":true,...}`, and the
 status must reach `done` with a one-word answer. Then delete
 `~/.config/herdr-core/templates/bh-bob.md`.
 
-## 8. Known limitations
+## 7. Known limitations
 
 These checks confirm the documented behavior, so that a Bob release that
 changes it gets noticed.
@@ -138,7 +125,7 @@ changes it gets noticed.
   Once the status is `working`, run `hc keys bh-cancel esc`. The status stays
   `working`.
 
-## 9. Clean up
+## 8. Clean up
 
 Kill and remove every `bh-*` terminal with `hc kill`, then `hc rm`. Delete
 `bh-probe.txt` if Bob created it. Leave bob-herdr installed unless the person

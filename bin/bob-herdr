@@ -26,7 +26,7 @@ EOF
 
 # Bob's hooks: a submitted prompt is working, a finished turn is done. Event
 # JSON arrives on stdin. Idle comes from the shim: Bob runs its SessionStart
-# hook at the first prompt, not at launch.
+# hook before its input box is ready, and also when it starts with a prompt.
 hook() {
   input=$(cat)
   status_enabled || return 0
@@ -37,6 +37,18 @@ hook() {
     *) return 0 ;;
   esac
   report "state=$state:app=bob"
+}
+
+# Sets bob_version to what `bob --version` prints, empty when bob does not
+# run, and succeeds when that is older than 2.1.0, the first Bob that takes
+# a prompt as an argument.
+bob_too_old() {
+  bob_version=$(bob --version 2>/dev/null | sed -n '1s/^\([0-9][0-9]*\.[0-9][0-9]*\).*/&/p')
+  [ -n "$bob_version" ] || return 1
+  major=${bob_version%%.*}
+  minor=${bob_version#*.}
+  minor=${minor%%[!0-9]*}
+  [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt 1 ]; }
 }
 
 # Bob's mascot from an installed IBM Bob IDE, else our own glyph.
@@ -79,6 +91,9 @@ install() {
   link bob
   if [ "$(command -v bob 2>/dev/null || :)" != "$bin_dir/bob" ]; then
     echo "Warning: bob runs $(command -v bob 2>/dev/null || echo nothing), not the shim. Put $bin_dir ahead of it on PATH."
+  fi
+  if bob_too_old; then
+    echo "Warning: Bob $bob_version is older than 2.1.0, which bob-herdr needs. Update Bob."
   fi
 
   # The hooks call this clone directly, so they work even if a link was
@@ -123,6 +138,11 @@ status() {
     fi
   done
   echo "bob runs: $(command -v bob 2>/dev/null || echo nothing)"
+  if bob_too_old; then
+    echo "Bob version: $bob_version (bob-herdr needs 2.1.0 or later)"
+  else
+    echo "Bob version: ${bob_version:-unknown}"
+  fi
   echo "Status hooks in $bob_settings: $(config hooks-count "$bob_settings") of 2"
   if [ -d "$app_home" ]; then
     entry=$(config program-show "$app_home/programs.json")

@@ -1,7 +1,7 @@
 #!/bin/sh
 # bob shim from bob-herdr. Runs the real Bob and, inside an hc terminal:
-# reports `idle` once Bob's input box is on screen, types a prompt given as
-# arguments into it (`bob "fix the tests"`), and clears the status on exit.
+# reports `idle` once Bob's input box is on screen, unless Bob starts with a
+# prompt (`bob "fix the tests"`), and clears the status on exit.
 
 self=$(realpath "$0")
 root=$(dirname "$(dirname "$self")")
@@ -39,122 +39,105 @@ real_bob() {
 
 bob=$(real_bob) || exit 127
 
-# Bob's headless and management commands, and help or version anywhere,
-# run as they are.
-case ${1:-} in
-  run | mcp | acp | --list-tasks | --show-license) exec "$bob" "$@" ;;
-esac
+# Help, version, a headless prompt and Bob's listings, anywhere, run as they
+# are.
 for arg do
   case $arg in
-    -p | --prompt | --prompt=* | -h | --help | -v | --version) exec "$bob" "$@" ;;
+    -p | --prompt | --prompt=* | -h | --help | -v | --version | --list-tasks | --list-tasks=* | --show-license)
+      exec "$bob" "$@"
+      ;;
   esac
 done
 
-# With `--`, everything before it goes to Bob untouched and everything after
-# it is the prompt. Without it, words that are neither options, the values of
-# Bob 2.0.9's options, nor a leading `chat` are the prompt. The loop walks the
-# original arguments and keeps Bob's in "$@".
+# Bob gets its arguments as they are. The shim only checks what they hold.
+# Options and the values of Bob 2.1.0's options are skipped; after `--`,
+# nothing is an option. Bob reads the first remaining word as a command when
+# it names one, even after `--`: its headless and management commands run as
+# they are, and `chat` is not a prompt. Any other word is a prompt.
 prompt=
 value=
-first=1
-split=
+word=
 rest=
 for arg do
-  [ "$arg" = -- ] && split=1
-done
-for arg do
-  shift
-  if [ -n "$rest" ]; then
-    prompt="${prompt:+$prompt }$arg"
-    continue
-  fi
-  if [ -n "$split" ]; then
-    if [ "$arg" = -- ]; then rest=1; else set -- "$@" "$arg"; fi
-    continue
-  fi
-  if [ "$value" = 1 ]; then
-    value=
-    set -- "$@" "$arg"
-    continue
-  fi
-  if [ "$value" = resume ]; then
-    value=
-    # A task id is 32 hex digits; anything else is not -r's value.
+  if [ -z "$rest" ]; then
+    if [ "$value" = 1 ]; then
+      value=
+      continue
+    fi
+    if [ "$value" = resume ]; then
+      value=
+      # Bob reads the word after -r as a task id, unless it is an option.
+      case $arg in
+        -*) ;;
+        *) continue ;;
+      esac
+    fi
     case $arg in
-      *[!0-9a-f]* | '') ;;
-      *) if [ ${#arg} -eq 32 ]; then set -- "$@" "$arg"; continue; fi ;;
+      --)
+        rest=1
+        continue
+        ;;
+      --instance-id | --workspace | --config-dir | --mode | --max-cost | --max-turns | --log-level | --team-id | --disable-tool-groups)
+        value=1
+        continue
+        ;;
+      -r | --resume)
+        value=resume
+        continue
+        ;;
+      -*) continue ;;
     esac
   fi
-  case $arg in
-    --instance-id | -w | --workspace | --mode | --max-cost | --max-turns | --log-level | --team-id | --disable-tool-groups)
-      value=1
-      set -- "$@" "$arg"
-      ;;
-    -r | --resume)
-      value=resume
-      set -- "$@" "$arg"
-      ;;
-    -*) set -- "$@" "$arg" ;;
-    chat)
-      if [ -n "$first" ]; then set -- "$@" "$arg"; else prompt="${prompt:+$prompt }$arg"; fi
-      ;;
-    *) prompt="${prompt:+$prompt }$arg" ;;
-  esac
-  first=
+  [ -n "$arg" ] || continue
+  if [ -z "$word" ]; then
+    word=1
+    case $arg in
+      run | mcp | extension | acp) exec "$bob" "$@" ;;
+      chat) continue ;;
+    esac
+  fi
+  prompt=1
 done
 
-# Typing a prompt in needs hc; reporting needs status_enabled. Either one
-# needs the helper below.
-in_hc=
-[ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1 && in_hc=1
-if [ -z "$in_hc" ]; then
-  [ -n "$prompt" ] && echo "bob-herdr: Bob starts without your prompt: typing it in needs an hc terminal with hc on PATH" >&2
-  status_enabled || exec "$bob" "$@"
-fi
+status_enabled || exec "$bob" "$@"
 
+# Without a prompt, a helper reports idle once Bob's input box is on screen,
+# which needs hc. With a prompt, nothing is reported here: Bob's hook reports
+# working once Bob has the prompt, and an idle report before that would end
+# an `hc wait` early.
+#
 # The helper and the shim share a folder: `pid` holds Bob's process id, and
-# `exited` appears once Bob has exited. The helper checks both before each
-# report or send, so it never acts for a Bob that is gone.
-state=$(mktemp -d "${TMPDIR:-/tmp}/bob-herdr.XXXXXX")
-bob_alive() {
-  [ ! -e "$state/exited" ] && [ -s "$state/pid" ] && kill -0 "$(cat "$state/pid")" 2>/dev/null
-}
-# Bob is busy, so the message goes in the status, not on the screen.
-note() {
-  bob_alive || return 0
-  status_enabled && report "state=idle:app=bob:msg=$(printf 'bob-herdr: %s' "$1" | base64 | tr -d '\n')"
-}
-
+# `exited` appears once Bob has exited. The helper checks both before it
+# reports, so it never reports for a Bob that is gone.
+state=
 helper=
-if [ -n "$in_hc" ]; then
+stop_helper() {
+  if [ -n "$helper" ]; then
+    : >"$state/exited"
+    pkill -P "$helper" 2>/dev/null
+    kill "$helper" 2>/dev/null
+    wait "$helper" 2>/dev/null
+  fi
+  [ -z "$state" ] || rm -rf "$state"
+}
+if [ -z "$prompt" ] && [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
+  # Until Bob runs, Ctrl-C ends the shim: the helper must not outlive it.
+  trap 'stop_helper; exit 130' INT
+  state=$(mktemp -d "${TMPDIR:-/tmp}/bob-herdr.XXXXXX")
   term=$HC_TERMINAL_ID
   (
     trap '' INT
     # Without HC_TERMINAL_ID, hc acts for nobody: a message to this terminal
-    # does not end the wait, and the prompt is not tagged as sent by it.
-    # Piped, not captured: hc stays a direct child, which the shim kills when
-    # Bob exits. A timeout also exits 0, hence the reason check.
-    if ! env -u HC_TERMINAL_ID hc wait "$term" --json \
+    # does not end the wait. Piped, not captured: hc stays a direct child,
+    # which the shim kills when Bob exits. A timeout also exits 0, hence the
+    # reason check.
+    env -u HC_TERMINAL_ID hc wait "$term" --json \
       --output "${BOB_HERDR_READY_TEXT:-/ for commands}" \
       --timeout "${BOB_HERDR_READY_TIMEOUT:-600}" 2>/dev/null |
-      grep -q '"reason":"output"'; then
-      [ -z "$prompt" ] || note "Bob's input box did not appear, so your first prompt was not typed in"
-      exit 0
-    fi
-    bob_alive || exit 0
-    if [ -z "$prompt" ]; then
-      # Without a prompt, Bob now waits for you: report it. With one, stay
-      # silent: Bob's hook reports working once the prompt is in, and an idle
-      # report now would end an `hc wait` before Bob has the prompt.
-      status_enabled && report "state=idle:app=bob"
-      exit 0
-    fi
-    # hc send can wait for you to stop typing; as a direct child, it dies
-    # with the helper if Bob exits meanwhile.
-    if ! env -u HC_TERMINAL_ID hc send "$term" -- "$prompt" >/dev/null 2>"$state/send.err"; then
-      note "your first prompt was not typed in: $(head -c 200 "$state/send.err")"
-    fi
-  ) &
+      grep -q '"reason":"output"' || exit 0
+    [ ! -e "$state/exited" ] && [ -s "$state/pid" ] && kill -0 "$(cat "$state/pid")" 2>/dev/null || exit 0
+    report "state=idle:app=bob"
+  ) 2>/dev/null &
   helper=$!
   # `hc wait --output` only sees output printed after it starts listening.
   # Bob takes over a second to draw its input box; this head start covers
@@ -164,29 +147,23 @@ fi
 
 # Bob runs in the background so the shim knows its process id. Its stdin is
 # the terminal (saved in fd 3), not the /dev/null a background job gets.
+# From here on Ctrl-C is Bob's: it shares the terminal's process group.
 exec 3<&0
+trap : INT
 "$bob" "$@" <&3 3<&- &
 bob_pid=$!
 exec 3<&-
-echo "$bob_pid" >"$state/pid"
+[ -z "$state" ] || echo "$bob_pid" >"$state/pid"
 
 # TERM and HUP for the shim go to Bob; the cleanup below runs once Bob exits.
-# Ctrl-C reaches Bob directly, as it shares the terminal's process group.
 trap 'kill -TERM "$bob_pid" 2>/dev/null' TERM
 trap 'kill -HUP "$bob_pid" 2>/dev/null' HUP
-trap : INT
 while :; do
   wait "$bob_pid"
   rc=$?
   kill -0 "$bob_pid" 2>/dev/null || break
 done
 
-: >"$state/exited"
-if [ -n "$helper" ]; then
-  pkill -P "$helper" 2>/dev/null
-  kill "$helper" 2>/dev/null
-  wait "$helper" 2>/dev/null
-fi
-status_enabled && report "state=clear"
-rm -rf "$state"
+stop_helper
+report "state=clear"
 exit $rc

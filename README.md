@@ -1,13 +1,12 @@
 # bob-herdr
 
 bob-herdr makes IBM Bob report its status to [herdr](https://herdr.dev), so
-the Herdr app shows Bob as idle, working or done. It also lets you start Bob
-with a first prompt (`bob "fix the failing test"`) and adds Bob to the app's
-**Start an agent** menu.
+the Herdr app shows Bob as idle, working or done. It also adds Bob to the
+app's **Start an agent** menu.
 
 herdr-core shows an agent's status only when the agent reports it with
 [OSC 7501](https://superlogical.com/rex/docs/build/program-status), the
-Program Status Protocol. Claude Code, Codex and Pi report it; Bob 2.0.9 does
+Program Status Protocol. Claude Code, Codex and Pi report it; Bob 2.1.0 does
 not. bob-herdr reports it for Bob through Bob's hooks and a `bob` shim.
 
 bob-herdr is unofficial and is not an IBM product.
@@ -16,16 +15,19 @@ bob-herdr is unofficial and is not an IBM product.
 
 - **Status:** the Herdr app shows Bob as idle, working or done in its agents
   sidebar and tab bar, and plays its notifications and sounds for Bob.
-- **First prompt:** `bob "fix the failing test"` starts Bob and types the
-  prompt in once Bob is ready. The Herdr app and `hc run bob "task"` pass a
-  task to Bob this way.
+- **First prompt:** Bob takes a first prompt as an argument
+  (`bob "fix the failing test"`), and the Herdr app and `hc run bob "task"`
+  pass a task to Bob this way. The status then goes straight to working, so
+  an `hc wait` started with Bob lasts until the first turn is done.
 - **Herdr app entry:** Bob's tabs show its name and icon, and **+ → Start an
   agent** lists IBM Bob.
 
 ## Requirements
 
-- [Bob](https://www.npmjs.com/package/@ibm/bob) on your `PATH`, installed
-  with `bun add -g @ibm/bob` or `npm install -g @ibm/bob`.
+- [Bob](https://www.npmjs.com/package/@ibm/bob) 2.1.0 or later on your
+  `PATH`, installed with `bun add -g @ibm/bob` or `npm install -g @ibm/bob`.
+  Earlier versions are not supported: they do not take a first prompt as an
+  argument, and the shim no longer types it in for them.
 - [herdr-core](https://herdr.dev/core/) (`hc`). The Herdr app is optional.
 - Node, which Bob also needs.
 - macOS 13 or later, or Linux. The scripts call `realpath`, which older macOS
@@ -65,8 +67,8 @@ bob-herdr uninstall   # remove the links, the hooks and the app entry
 The shim and the real Bob are both named `bob`, and the shell runs the one
 that comes first on `PATH`. The herdr-core server has its own `PATH`: see
 [Run Bob with hc](#run-bob-with-hc). If the real Bob comes first, the hooks still
-report working and done, but Bob never shows as idle, the shim does not type
-a first prompt in, and the status is not cleared when Bob exits.
+report working and done, but Bob never shows as idle, and the status is not
+cleared when Bob exits.
 
 `bob-herdr status` prints which `bob` runs. The real Bob is in a different
 folder depending on how you installed it:
@@ -95,18 +97,17 @@ bob "fix the failing test in src/x.ts"
 bob --mode plan "outline the refactor"
 ```
 
-Bob's options go before the prompt. The shim recognizes the options of `bob`
-and `bob chat` in Bob 2.0.9. Write any other option that takes a value as
-`--option=value`, or put the prompt after `--`. With `--`, the shim passes
-everything before it to Bob unchanged:
+The shim passes every argument to Bob unchanged. It only checks whether they
+hold a prompt, because it reports idle only when Bob starts without one. For
+that check it knows the options of `bob` and `bob chat` in Bob 2.1.0. Write
+any other option that takes a value as `--option=value`: the shim would take
+a separate value for a prompt.
 
 ```sh
-bob --new-option=value "the prompt"
-bob --new-option value -- "the prompt"
+bob --new-option=value
 ```
 
-Outside an hc terminal, Bob starts without the prompt, and the shim prints
-a message saying so. `bob -p`, `bob run`, `bob mcp` and `bob acp` run Bob
+`bob -p`, `bob run`, `bob mcp`, `bob extension` and `bob acp` run Bob
 directly, without the shim.
 
 ### Run Bob with hc
@@ -168,33 +169,32 @@ Bob's hooks report its status to the terminal as OSC 7501:
 | `UserPromptSubmit` | working |
 | `Stop` | done |
 
-Bob runs its `SessionStart` hook at the first prompt, not at launch, so the
-shim reports idle instead.
+Bob runs its `SessionStart` hook at launch, but before its input box is
+ready, and also when it starts with a prompt, so the shim reports idle
+instead.
 
-The `bob` shim runs the next `bob` on `PATH` that is not a bob-herdr shim. In
-an hc terminal, the shim also:
+The `bob` shim runs the next `bob` on `PATH` that is not a bob-herdr shim,
+with the arguments it was given. In an hc terminal, the shim also:
 
-1. Waits with `hc wait --output` until Bob's input box is on screen. If Bob
-   first asks whether to trust the folder, the wait lasts until you answer.
-2. Without a prompt, reports idle, so Bob appears as an agent as soon as it
-   is ready. herdr-core templates rely on this: they type their first
-   message after the agent first reports a status.
-3. With a prompt, types it in with `hc send` and reports nothing itself. The
-   hook reports working once Bob has the prompt, so an `hc wait` started
-   with Bob lasts until the first turn is done.
-4. Clears the status when Bob exits.
+1. Without a prompt, waits with `hc wait --output` until Bob's input box is
+   on screen, then reports idle, so Bob appears as an agent as soon as it is
+   ready. If Bob first asks whether to trust the folder, the wait lasts
+   until you answer. herdr-core templates rely on this report: they type
+   their first message after the agent first reports a status.
+2. With a prompt, reports nothing itself. The hook reports working once Bob
+   has the prompt, a few seconds after its input box appears, so an
+   `hc wait` started with Bob lasts until the first turn is done.
+3. Clears the status when Bob exits.
 
-Before it reports or types, the shim checks that Bob is still running, so a
-prompt never lands in the shell after Bob has exited. If the prompt cannot
-be typed in, the status shows idle with a message saying why.
+Before it reports idle, the shim checks that Bob is still running.
 
 ## Limitations
 
-Bob's hooks cannot report everything OSC 7501 supports:
+bob-herdr does not report everything OSC 7501 supports:
 
-- **No blocked status.** Bob has no hook for permission prompts, and
-  `PreToolUse` runs before Bob checks the approval. While Bob waits for your
-  approval, it shows as working.
+- **No blocked status.** While Bob waits for your approval, it shows as
+  working. Bob 2.1.0 has `PermissionRequest` and `PermissionResolved` hooks
+  for this, which bob-herdr does not use yet.
 - **Cancelled turns stay working.** `Stop` does not run when you cancel a
   turn with Esc or Ctrl-C. Your next prompt sets the status again.
 - **No error status.** No hook runs when a turn fails.
@@ -203,14 +203,15 @@ The shim and the protocol add their own limits:
 
 - **Ready detection reads the screen.** The shim waits for the text
   `/ for commands` in Bob's placeholder line
-  (`Build Anything, @ for context, / for commands`). If a Bob release changes
-  that line, set `BOB_HERDR_READY_TEXT`. `hc wait --output` sees only output
-  printed after it starts listening, so the shim starts listening 0.3 seconds
-  before it starts Bob. If Bob still draws its input box first, the wait
-  ends after `BOB_HERDR_READY_TIMEOUT` and the prompt is not typed in.
-- **Options the shim does not know.** An unknown option followed by a
-  separate value makes that value part of the prompt. Use `--option=value`
-  or `--` (see [Use](#use)).
+  (`Build Anything, @ for context, / for commands, $ for skills`). If a Bob
+  release changes that line, set `BOB_HERDR_READY_TEXT`. `hc wait --output`
+  sees only output printed after it starts listening, so the shim starts
+  listening 0.3 seconds before it starts Bob. If Bob still draws its input
+  box first, the wait ends after `BOB_HERDR_READY_TIMEOUT` and Bob shows no
+  status until your first prompt.
+- **Options the shim does not know.** The shim takes the separate value of
+  an unknown option for a prompt, and does not report idle. Use
+  `--option=value` (see [Use](#use)).
 - **Exiting Bob clears every status record in the terminal.** OSC 7501
   addresses a terminal's main status record only by clearing all records, so
   a done status left by an earlier program in the same pane disappears too.
@@ -222,7 +223,7 @@ These limits go away when Bob reports OSC 7501 itself, as Codex does.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `BOB_HERDR_STATUS` | on in hc terminals only | `1`: the hooks and the shim report status in any terminal. `0`: they never report. The shim still types a first prompt in. |
+| `BOB_HERDR_STATUS` | on in hc terminals only | `1`: the hooks and the shim report status in any terminal. `0`: they never report. |
 | `BOB_HERDR_BOB` | the next `bob` on `PATH` | The real Bob that the shim runs. It must not be a bob-herdr shim. |
 | `BOB_HERDR_READY_TEXT` | `/ for commands` | The text that shows Bob's input box is ready |
 | `BOB_HERDR_READY_TIMEOUT` | `600` | Seconds to wait for that text |
@@ -230,8 +231,9 @@ These limits go away when Bob reports OSC 7501 itself, as Codex does.
 | `BOB_HERDR_BOB_SETTINGS` | `~/.bob/settings/settings.json` | The Bob settings file that `install` edits |
 | `BOB_HERDR_APP_HOME` | `~/.config/herdr-app` | The Herdr app folder that `install` edits |
 
-With `BOB_HERDR_STATUS=1` outside an hc terminal, the shim reports and clears
-the status, but it cannot detect when Bob is ready or type a prompt in.
+With `BOB_HERDR_STATUS=1` outside an hc terminal, the hooks report working
+and done and the shim clears the status, but the shim cannot detect when Bob
+is ready, so Bob never shows as idle.
 
 ## Testing
 
