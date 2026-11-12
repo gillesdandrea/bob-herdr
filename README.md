@@ -130,8 +130,11 @@ hc kill fix && hc rm fix     # when you accept the work
 ```
 
 `hc get fix` shows Bob's status, and `hc ls` lists the terminal with your
-other terminals. In the Herdr app, Bob appears in the agents sidebar. A
-terminal started without a pane opens in peek.
+other terminals. In the Herdr app, a Bob started from another terminal
+appears in the agents sidebar as a row under that terminal. The app raises
+its notifications, and lists Done, for Bob in its own pane or tab only: under
+another terminal, the row of a finished Bob looks idle, and its floating
+window says finished. A terminal started without a pane opens in peek.
 
 The examples call the shim by its full path because terminals started with
 `hc run`, and templates, look up commands in the herdr-core server's `PATH`,
@@ -164,7 +167,9 @@ reports that Bob is ready.
 When Bob needs you, `hc wait` ends with the status blocked, and
 `hc get fix` shows why: an approval (kind `permission`, with the command), a
 question (kind `question`, with its text) or a sign-in (kind `auth`). Answer
-with `hc keys fix enter` or `hc attach fix`.
+with `hc keys fix enter` or `hc attach fix`. The status leaves blocked a
+second or two after your answer, so pause before the next `hc wait`, which
+would otherwise return at once.
 
 ## How it works
 

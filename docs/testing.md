@@ -11,7 +11,8 @@ touch other terminals, and never stop or restart the herdr-core server.
 ## 0. Preconditions
 
 - `echo $HC_TERMINAL_ID` prints a terminal address, so you are in an hc
-  terminal.
+  terminal. Without one, stop: the terminals you start have no parent and do
+  not appear in the app's sidebar.
 - `hc --version` and `herdr-app status` work.
 - `bob --version` prints 2.1.0 or later. If it fails or prints an earlier
   version, stop and ask the person to fix their Bob install.
@@ -79,18 +80,22 @@ hc run --bg --name bh-app ~/.local/bin/bob
 ```
 
 Without a prompt, `hc get bh-app --json` shows `idle` once Bob's input box is
-up. Ask the person to open `bh-app` from the agents sidebar and confirm two
-things: the sidebar lists it with the Bob icon and the name IBM Bob, and its
-tab shows the same icon.
+up. Ask the person to confirm that the agents sidebar lists `bh-app` as a row
+under your own terminal's row, with the Bob icon.
 
-Then ask them to type a short prompt in it, switch to another tab before Bob
-finishes, and confirm that the done notification appears.
+The app labels that row with the terminal's name, shows its done as idle and
+raises no notification for it. Those belong to the next step.
 
 ## 5. Start an agent (person)
 
 Ask the person to choose **+ → Start an agent → IBM Bob** with the task
 `Reply with the single word BANANA`. Find the new terminal with `hc ls`, then
-check it as in step 2: it reaches `done` and answers BANANA.
+check it as in step 2: it reaches `done` and answers BANANA. Ask the person
+to confirm that its tab is titled IBM Bob and shows the Bob icon.
+
+Then ask them to type a short prompt in it, switch to another tab before Bob
+finishes, and confirm that the "IBM Bob finished" notification appears and
+that the sidebar lists the terminal under Done.
 
 ## 6. A herdr-core template
 
@@ -131,8 +136,13 @@ hc wait bh-blocked --json --timeout 120
   then the same `hc wait`. It must end with `"status":"blocked"`, and
   `hc get` shows `"kind":"question"` with the question as `msg`. Answer with
   `hc keys bh-blocked enter`: the status becomes `working`, then `done`.
-- **`/clear`:** run `hc send bh-blocked "/clear"`. Within 15 seconds the
-  status is `idle`.
+- **`/clear`:** type it with `hc keys bh-blocked / c l e a r`, then
+  `hc keys bh-blocked enter`. Within 15 seconds the status is `idle`. Do not
+  use `hc send` here: from an hc terminal it wraps the text in an `<hc>` tag,
+  and Bob takes that for a prompt.
+
+The status leaves `blocked` a second or two after your key, so pause before
+the next `hc wait`, which would otherwise return at once.
 
 Not covered: the sign-in screen, which needs a Bob that is signed out. With
 one, `hc run --bg --name bh-auth ~/.local/bin/bob "hello"` then `hc wait`
