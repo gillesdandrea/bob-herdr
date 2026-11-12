@@ -26,6 +26,7 @@ root=$(dirname "$(dirname "$self")")
 bin_dir=${BOB_HERDR_BIN_DIR:-$HOME/.local/bin}
 bob_settings=${BOB_HERDR_BOB_SETTINGS:-$HOME/.bob/settings/settings.json}
 app_home=${BOB_HERDR_APP_HOME:-$HOME/.config/herdr-app}
+options_file=${BOB_HERDR_OPTIONS:-${XDG_CONFIG_HOME:-$HOME/.config}/bob-herdr/value-options}
 config() { node "$root/lib/config.mjs" "$@"; }
 
 usage() {
@@ -105,6 +106,24 @@ install() {
     echo "Added the status hooks to $bob_settings"
   fi
 
+  # The shim must tell an option's value from a prompt. Bob's help lists
+  # the options that take one, as `--mode <mode>`; an optional value, as in
+  # `--resume [task-id]`, is not one of them.
+  options=$({
+    bob --help
+    bob chat --help
+  } 2>/dev/null |
+    sed -n -E 's/^ +(-[A-Za-z0-9]), (--[A-Za-z0-9][A-Za-z0-9-]*) <.*/\1 \2/p; s/^ +(--[A-Za-z0-9][A-Za-z0-9-]*) <.*/\1/p; s/^ +(-[A-Za-z0-9]) <.*/\1/p' |
+    tr ' ' '\n' | sort -u | tr '\n' ' ')
+  options=${options% }
+  if [ -n "$options" ]; then
+    mkdir -p "$(dirname "$options_file")"
+    printf '%s\n' "$options" >"$options_file"
+    echo "Recorded Bob's options that take a value in $options_file"
+  else
+    echo "Kept the built-in list of Bob's options: bob --help listed none"
+  fi
+
   if [ -d "$app_home" ]; then
     icon=$(icon_source)
     tint=false
@@ -125,6 +144,11 @@ uninstall() {
   unlink_ours bob-herdr
   config hooks-remove "$bob_settings"
   echo "Removed the status hooks from $bob_settings"
+  if [ -f "$options_file" ]; then
+    rm "$options_file"
+    [ -n "${BOB_HERDR_OPTIONS:-}" ] || rmdir "$(dirname "$options_file")" 2>/dev/null || :
+    echo "Removed $options_file"
+  fi
   if [ -d "$app_home" ]; then
     config program-remove "$app_home/programs.json"
     rm -rf "$app_home/bob-herdr"
@@ -142,6 +166,11 @@ status() {
     fi
   done
   echo "bob runs: $(command -v bob 2>/dev/null || echo nothing)"
+  if [ -s "$options_file" ]; then
+    echo "Bob's options that take a value: recorded in $options_file"
+  else
+    echo "Bob's options that take a value: built-in list"
+  fi
   if bob_too_old; then
     echo "Bob version: $bob_version (bob-herdr needs 2.1.0 or later)"
   else

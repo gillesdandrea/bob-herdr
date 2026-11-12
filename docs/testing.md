@@ -55,8 +55,9 @@ The wait must end with `"reason":"status"` and `"status":"done"`, not
 `hc get bh-status --json` once more: `.status` is `done` with
 `"app":"bob"` and a `msg` that is the first line of Bob's reply.
 
-If Bob asks whether to trust the folder, `hc read bh-status` shows the
-question. Answer with `hc keys bh-status enter` and keep polling.
+If the wait ends with `"status":"blocked"` and `hc get bh-status --json` has
+the `msg` "Bob asks whether to trust this folder", ask the person before you
+answer: Enter trusts the folder for good. Then run the wait again.
 
 `hc read bh-status` must show the prompt once and the answer PINEAPPLE.
 
@@ -143,6 +144,15 @@ hc wait bh-blocked --json --timeout 120
 
 The status leaves `blocked` a second or two after your key, so pause before
 the next `hc wait`, which would otherwise return at once.
+
+- **Trust question:** in a folder outside every folder Bob already trusts,
+  such as one made with `mktemp -d`, run
+  `hc run --bg --name bh-trust --cwd <folder> ~/.local/bin/bob "hello"`, then
+  `hc wait bh-trust --json --timeout 120`. It must end with
+  `"status":"blocked"`, and `hc get` shows `"kind":"permission"` with the
+  `msg` "Bob asks whether to trust this folder". Leave with
+  `hc keys bh-trust esc`, which exits Bob without trusting the folder: the
+  status is then `null`.
 
 Not covered: the sign-in screen, which needs a Bob that is signed out. With
 one, `hc run --bg --name bh-auth ~/.local/bin/bob "hello"` then `hc wait`

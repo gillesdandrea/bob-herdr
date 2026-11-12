@@ -1,8 +1,8 @@
 #!/bin/sh
 # bob shim from bob-herdr. Runs the real Bob and, inside an hc terminal:
-# reports `idle` once Bob's input box is on screen, unless Bob starts with a
-# prompt (`bob "fix the tests"`), where it reports a sign-in screen as
-# `blocked` instead, and clears the status on exit.
+# reports Bob's trust question and sign-in screen as `blocked`, reports `idle`
+# once Bob's input box is on screen, unless Bob starts with a prompt
+# (`bob "fix the tests"`), and clears the status on exit.
 
 self=$(realpath "$0")
 root=$(dirname "$(dirname "$self")")
@@ -51,8 +51,16 @@ for arg do
   esac
 done
 
+# Bob's options that take a value: those of Bob 2.1.0, and those that
+# `bob-herdr install` read from Bob's help.
+value_options='--instance-id --workspace --config-dir --mode --max-cost --max-turns --log-level --team-id --disable-tool-groups'
+options_file=${BOB_HERDR_OPTIONS:-${XDG_CONFIG_HOME:-$HOME/.config}/bob-herdr/value-options}
+if [ -r "$options_file" ] && read -r recorded <"$options_file" && [ -n "$recorded" ]; then
+  value_options="$value_options $recorded"
+fi
+
 # Bob gets its arguments as they are. The shim only checks what they hold.
-# Options and the values of Bob 2.1.0's options are skipped; after `--`,
+# Options and the values of the options above are skipped; after `--`,
 # nothing is an option. Bob reads the first remaining word as a command when
 # it names one, even after `--`: its headless and management commands run as
 # they are, and `chat` is not a prompt. Any other word is a prompt.
@@ -74,13 +82,15 @@ for arg do
         *) continue ;;
       esac
     fi
+    case " $value_options " in
+      *" $arg "*)
+        value=1
+        continue
+        ;;
+    esac
     case $arg in
       --)
         rest=1
-        continue
-        ;;
-      --instance-id | --workspace | --config-dir | --mode | --max-cost | --max-turns | --log-level | --team-id | --disable-tool-groups)
-        value=1
         continue
         ;;
       -r | --resume)
@@ -103,14 +113,21 @@ done
 
 status_enabled || exec "$bob" "$@"
 
-# A helper watches Bob's screen through hc while Bob starts.
+# A helper watches Bob's screen through hc while Bob starts, looking about
+# twice a second until Bob's input box is up.
 #
-# Without a prompt, it reports idle once Bob's input box is on screen. With a
-# prompt, idle would end an `hc wait` early, and Bob's hook reports working
-# once Bob has the prompt. Until then Bob may stop at its sign-in screen: the
-# helper reports that as blocked. Only with a prompt, which Bob itself sends
-# after sign-in: herdr-core drops a template's first message when the first
-# status is blocked.
+# Before its input box, Bob may stop at a question: whether to trust the
+# folder, or its sign-in screen. The helper reports each as blocked while it
+# is on screen, and clears that report when the question goes: in a folder
+# you do not trust, no hook follows to replace it.
+#
+# Once the input box is up, the helper reports idle if Bob started without a
+# prompt. With a prompt it reports nothing: idle would end an `hc wait`
+# early, and Bob's hook reports working once Bob has the prompt.
+#
+# An earlier program may have left one of these texts on the screen. The
+# first look comes before Bob draws, and if it shows one of them, nothing
+# counts until a look shows none, which is Bob clearing the screen.
 #
 # The helper and the shim share a folder: `pid` holds Bob's process id, and
 # `exited` appears once Bob has exited. The helper checks both before it
@@ -119,12 +136,13 @@ state=
 helper=
 ready=${BOB_HERDR_READY_TEXT:-/ for commands}
 signin=${BOB_HERDR_SIGNIN_TEXT:-Complete sign-in in your browser|in your browser to sign in}
+trust=${BOB_HERDR_TRUST_TEXT:-Do you trust this folder}
 bob_alive() {
   [ ! -e "$state/exited" ] && [ -s "$state/pid" ] && kill -0 "$(cat "$state/pid")" 2>/dev/null
 }
 stop_helper() {
   if [ -n "$helper" ]; then
-    : >"$state/exited"
+    { : >"$state/exited"; } 2>/dev/null
     pkill -P "$helper" 2>/dev/null
     kill "$helper" 2>/dev/null
     wait "$helper" 2>/dev/null
@@ -134,62 +152,85 @@ stop_helper() {
 if [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
   # Until Bob runs, Ctrl-C ends the shim: the helper must not outlive it.
   trap 'stop_helper; exit 130' INT
+  # A shim that was killed leaves its folder behind: remove the folders
+  # whose Bob is gone.
+  for old in "${TMPDIR:-/tmp}"/bob-herdr.*; do
+    [ -s "$old/pid" ] && read -r old_pid <"$old/pid" && ! kill -0 "$old_pid" 2>/dev/null && rm -rf "$old"
+  done
   state=$(mktemp -d "${TMPDIR:-/tmp}/bob-herdr.XXXXXX")
   term=$HC_TERMINAL_ID
-  # Without HC_TERMINAL_ID, hc acts for nobody: a message to this terminal
-  # does not end a wait.
-  if [ -z "$prompt" ]; then
-    (
-      trap '' INT
-      # Piped, not captured: hc stays a direct child, which the shim kills
-      # when Bob exits. A timeout also exits 0, hence the reason check.
-      env -u HC_TERMINAL_ID hc wait "$term" --json --output "$ready" \
-        --timeout "${BOB_HERDR_READY_TIMEOUT:-600}" 2>/dev/null |
-        grep -q '"reason":"output"' || exit 0
-      bob_alive || exit 0
-      report "state=idle:app=bob"
-    ) 2>/dev/null &
-    helper=$!
-    # `hc wait --output` only sees output printed after it starts listening.
-    # Bob takes over a second to draw its input box; this head start covers
-    # the time hc needs to connect.
-    sleep 0.3
-  else
-    (
-      trap '' INT
-      # The sign-in screen never comes once the input box is up, so the
-      # helper looks about once a second until then. An earlier program may
-      # have left either text on the screen: the first look comes before
-      # Bob draws, and if it shows one of them, nothing counts until a look
-      # shows neither, which is Bob clearing the screen.
-      fresh=
-      tries=0
-      while [ "$tries" -lt "${BOB_HERDR_READY_TIMEOUT:-600}" ] && [ ! -e "$state/exited" ]; do
-        tries=$((tries + 1))
-        screen=$(env -u HC_TERMINAL_ID hc read "$term" --lines 40 2>/dev/null)
-        found=
+  (
+    trap '' INT
+    fresh=
+    asked=
+    looks=$((${BOB_HERDR_READY_TIMEOUT:-600} * 2))
+    while [ "$looks" -gt 0 ] && [ ! -e "$state/exited" ]; do
+      looks=$((looks - 1))
+      # Without HC_TERMINAL_ID, hc acts for nobody. A look that fails says
+      # nothing about the screen.
+      if ! screen=$(env -u HC_TERMINAL_ID hc read "$term" --lines 40 2>/dev/null); then
+        sleep 0.5
+        continue
+      fi
+      found=
+      if printf '%s' "$screen" | grep -Eq "$trust"; then
+        found=trust
+      elif printf '%s' "$screen" | grep -Eq "$signin"; then
+        found=signin
+      else
         case $screen in
           *"$ready"*) found=ready ;;
         esac
-        [ -n "$found" ] || ! printf '%s' "$screen" | grep -Eq "$signin" || found=signin
-        if [ -z "$fresh" ]; then
-          if [ -n "$found" ]; then
-            sleep 0.3
-            continue
+      fi
+      if [ -z "$fresh" ]; then
+        if [ -n "$found" ]; then
+          sleep 0.3
+          continue
+        fi
+        fresh=1
+      fi
+      if [ -n "$asked" ] && [ "$found" != "$asked" ]; then
+        # Only our own report: a hook may have reported since. If the
+        # status cannot be read, the next look tries again.
+        if ! status=$(env -u HC_TERMINAL_ID hc get "$term" --json 2>/dev/null); then
+          sleep 0.5
+          continue
+        fi
+        case $status in
+          *"\"msg\":\"$msg\""*) report "state=clear" ;;
+        esac
+        asked=
+      fi
+      case $found in
+        ready)
+          if [ -z "$prompt" ] && bob_alive; then
+            # Text typed before the input box was up may already be a
+            # prompt: a hook's working or blocked report stays.
+            case $(env -u HC_TERMINAL_ID hc get "$term" --json 2>/dev/null) in
+              *'"app":"bob"'*'"state":"working"'* | *'"app":"bob"'*'"state":"blocked"'*) ;;
+              *) report "state=idle:app=bob" ;;
+            esac
           fi
-          fresh=1
-        fi
-        [ "$found" != ready ] || exit 0
-        if [ "$found" = signin ]; then
-          bob_alive || exit 0
-          report "state=blocked:kind=auth:app=bob:msg=$(printf 'Sign in to Bob in your browser' | base64 | tr -d '\n')"
           exit 0
-        fi
-        sleep 1
-      done
-    ) 2>/dev/null &
-    helper=$!
-  fi
+          ;;
+        trust)
+          kind=permission
+          msg='Bob asks whether to trust this folder'
+          ;;
+        signin)
+          kind=auth
+          msg='Sign in to Bob in your browser'
+          ;;
+      esac
+      if [ -n "$found" ] && [ "$found" != "$asked" ]; then
+        bob_alive || exit 0
+        report "state=blocked:kind=$kind:app=bob:msg=$(printf '%s' "$msg" | base64 | tr -d '\n')"
+        asked=$found
+      fi
+      sleep 0.5
+    done
+  ) 2>/dev/null &
+  helper=$!
 fi
 
 # Bob runs in the background so the shim knows its process id. Its stdin is
