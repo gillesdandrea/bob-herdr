@@ -6,13 +6,18 @@ bob-herdr reads these environment variables. None is required.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `BOB_HERDR_STATUS` | on in hc terminals only | `1`: the hooks and the shim report status in any terminal. `0`: they never report. |
+| `BOB_HERDR_STATUS` | on in hc terminals and Rex blocks only | `1`: the hooks and the shim report status in any terminal. `0`: they never report. |
 | `BOB_HERDR_BOB` | the next `bob` on `PATH` | The real Bob that the shim runs. It must not be a bob-herdr shim. |
 
-With `BOB_HERDR_STATUS=1` outside an hc terminal, the hooks report as usual
-and the shim clears the status at exit. The shim cannot see Bob's screen
-there, so Bob never shows as idle at launch, and its trust and sign-in
-questions are not reported.
+With `BOB_HERDR_STATUS=1` outside an hc terminal or a Rex block, the hooks
+report as usual and the shim clears the status at exit. The shim cannot see
+Bob's screen there, so Bob never shows as idle at launch, and its trust and
+sign-in questions are not reported.
+
+A Rex block is one where `REX_BLOCK` is set, `TERM_PROGRAM` is `rex`, and
+none of `TMUX`, `STY` and `ZELLIJ` is set. A program started from a Rex
+block inherits `REX_BLOCK`. An editor's own terminal sets its own
+`TERM_PROGRAM`, and tmux, GNU screen and zellij drop the reports.
 
 ## Text that the shim looks for on Bob's screen
 

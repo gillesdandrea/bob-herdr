@@ -168,11 +168,37 @@ changes it gets noticed.
   Once the status is `working`, run `hc keys bh-cancel esc`. The status stays
   `working`.
 
-## 9. Clean up
+## 9. Rex
 
-Kill and remove every `bh-*` terminal with `hc kill`, then `hc rm`. Delete
-`bh-probe.txt` if Bob created it. Leave bob-herdr installed unless the person
-asks you to remove it.
+Skip this step, and say so, if `command -v rex` prints nothing. Rex keeps
+no `wait` for a status, so poll
+`rex block call -b <label> program_status` every few seconds: it prints the
+status records, `{"records":[]}` when there are none. Start each block with
+`--focus=false`, so that it does not take the person's focus, and
+`--keep-open`, so that it stays after Bob exits.
+
+- **Idle at launch, then working and done:**
+  `rex run --focus=false --keep-open --label bh-rex -- ~/.local/bin/bob`.
+  Once Bob's input box is up, the record is `idle` with `"app":"bob"`. Then
+  `rex send -b bh-rex "Reply with the single word PINEAPPLE"` and
+  `rex send-key -b bh-rex enter`: the record becomes `working`, then `done`
+  with a `msg` that is the first line of Bob's reply.
+- **Exit:** `rex send-key -b bh-rex ctrl+c`, twice. After a few seconds the
+  block shows `{"records":[]}`.
+- **Trust question:** in a folder outside every folder Bob already trusts,
+  run
+  `rex run --focus=false --keep-open --label bh-rex-trust --cwd <folder> -- ~/.local/bin/bob`.
+  The record is `blocked` with `"kind":"permission"` and the `msg` "Bob asks
+  whether to trust this folder". Leave with
+  `rex send-key -b bh-rex-trust esc`: the block then shows
+  `{"records":[]}`.
+
+## 10. Clean up
+
+Kill and remove every `bh-*` terminal with `hc kill`, then `hc rm`. Close
+every `bh-*` Rex block with `rex block close <label>`. Delete `bh-probe.txt`
+if Bob created it. Leave bob-herdr installed unless the person asks you to
+remove it.
 
 ## Report
 
