@@ -2,7 +2,7 @@
 
 bob-herdr reports Bob's status to the terminal as
 [OSC 7501](https://superlogical.com/rex/docs/build/program-status), which
-herdr-core reads. Two parts send the reports: Bob's hooks, and a shim that
+herdr-core and Rex read. Two parts send the reports: Bob's hooks, and a shim that
 stands in for the `bob` command.
 
 ## The hooks
@@ -34,11 +34,14 @@ folder the hooks report nothing.
 
 The shim is the file `bin/bob`, linked as `~/.local/bin/bob`. It runs the
 next `bob` on `PATH` that is not itself, with the arguments it was given.
-Inside an hc terminal it also reports what the hooks cannot.
+Inside an hc terminal or a Rex block it also reports what the hooks cannot.
 
-**At launch.** The shim reads Bob's screen with `hc read` about twice a
-second until Bob's input box is on screen, for about
-`BOB_HERDR_READY_TIMEOUT` seconds at most. It looks for three texts:
+**At launch.** The shim reads Bob's screen about twice a second, with
+`hc read` in an hc terminal and `rex capture` in a Rex block, until Bob's
+input box is on screen, for about
+`BOB_HERDR_READY_TIMEOUT` seconds at most. In Rex, each look copies the
+block's whole scrollback, so while the trust or sign-in question is on
+screen the shim looks only every 2.5 seconds. It looks for three texts:
 
 - Bob's question whether to trust the folder, and its sign-in screen. The
   shim reports each as blocked while it is on screen, and clears that report
@@ -68,6 +71,12 @@ records. So each clear, at exit or when a question goes, also removes a done
 status left by an earlier program in the same pane.
 
 Before each report, the shim checks that Bob is still running.
+
+The shim does not ask the terminal for the current status, which OSC 7501
+has no way to do. It passes Bob a folder, `BOB_HERDR_STATE`, and each
+report, from a hook or from the shim, is also kept there as `last`. From it
+the shim knows whether a hook has already reported working or blocked, and
+whether a blocked report it is about to clear is still its own.
 
 ### Telling a prompt from an option's value
 

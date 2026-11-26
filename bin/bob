@@ -1,8 +1,8 @@
 #!/bin/sh
-# bob shim from bob-herdr. Runs the real Bob and, inside an hc terminal:
-# reports Bob's trust question and sign-in screen as `blocked`, reports `idle`
-# once Bob's input box is on screen, unless Bob starts with a prompt
-# (`bob "fix the tests"`), and clears the status on exit.
+# bob shim from bob-herdr. Runs the real Bob and, inside an hc terminal or a
+# Rex block: reports Bob's trust question and sign-in screen as `blocked`,
+# reports `idle` once Bob's input box is on screen, unless Bob starts with a
+# prompt (`bob "fix the tests"`), and clears the status on exit.
 
 self=$(realpath "$0")
 root=$(dirname "$(dirname "$self")")
@@ -113,8 +113,10 @@ done
 
 status_enabled || exec "$bob" "$@"
 
-# A helper watches Bob's screen through hc while Bob starts, looking about
-# twice a second until Bob's input box is up.
+# A helper watches Bob's screen while Bob starts, looking about twice a
+# second until Bob's input box is up. It reads the screen with `hc read` in
+# an hc terminal and `rex capture` in a Rex block. In any other terminal
+# there is no helper: no idle at launch, and no trust or sign-in report.
 #
 # Before its input box, Bob may stop at a question: whether to trust the
 # folder, or its sign-in screen. The helper reports each as blocked while it
@@ -129,9 +131,11 @@ status_enabled || exec "$bob" "$@"
 # first look comes before Bob draws, and if it shows one of them, nothing
 # counts until a look shows none, which is Bob clearing the screen.
 #
-# The helper and the shim share a folder: `pid` holds Bob's process id, and
-# `exited` appears once Bob has exited. The helper checks both before it
-# reports, so it never reports for a Bob that is gone.
+# The helper, the shim and Bob's hooks share a folder, BOB_HERDR_STATE: `pid`
+# holds Bob's process id, `exited` appears once Bob has exited, and `last`
+# holds the last report, from the helper or a hook. The helper checks `pid`
+# and `exited` before it reports, so it never reports for a Bob that is gone,
+# and reads `last` so it never replaces a hook's report.
 state=
 helper=
 ready=${BOB_HERDR_READY_TEXT:-/ for commands}
@@ -149,7 +153,42 @@ stop_helper() {
   fi
   [ -z "$state" ] || rm -rf "$state"
 }
-if [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
+# The screen and about 40 lines above it, as `hc read --lines 40` gives.
+# In Rex, the capture holds the whole scrollback, then every row of the
+# screen, blank ones included, in escape sequences: the plain text format
+# leaves out the blank rows at the bottom, so its last lines are not the
+# screen. The sequences are removed, and so are the carriage returns.
+esc=$(printf '\033')
+bel=$(printf '\007')
+cr=$(printf '\r')
+plain="s#$esc\\][^$bel$esc]*($bel|$esc\\\\)##g; s#$esc\\[[0-9;:?<=>]*[ -/]*[@-~]##g; s#$esc[ -/]*[0-~]##g; s#$cr\$##"
+look() {
+  case $terminal in
+    hc)
+      # Without HC_TERMINAL_ID, hc acts for nobody.
+      env -u HC_TERMINAL_ID hc read "$term" --lines 40
+      ;;
+    rex)
+      rows=$(stty size </dev/tty 2>/dev/null) && rows=${rows%% *} || rows=
+      case $rows in
+        '' | *[!0-9]*) rows=$(rex block call -b "$term" size 2>/dev/null | sed -n 's/.*"rows":\([0-9][0-9]*\).*/\1/p') ;;
+      esac
+      [ -n "$rows" ] || return 1
+      all=$(rex capture -b "$term" --format vt) || return 1
+      printf '%s\n' "$all" | tail -n $((rows + 40)) | LC_ALL=C sed -E "$plain"
+      ;;
+  esac
+}
+last_report() {
+  last=
+  { read -r last <"$state/last"; } 2>/dev/null || :
+}
+status_terminal
+case $terminal in
+  hc) term=$HC_TERMINAL_ID ;;
+  rex) term=$REX_BLOCK ;;
+esac
+if [ -n "$terminal" ] && command -v "$terminal" >/dev/null 2>&1; then
   # Until Bob runs, Ctrl-C ends the shim: the helper must not outlive it.
   trap 'stop_helper; exit 130' INT
   # A shim that was killed leaves its folder behind: remove the folders
@@ -158,7 +197,7 @@ if [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
     [ -s "$old/pid" ] && read -r old_pid <"$old/pid" && ! kill -0 "$old_pid" 2>/dev/null && rm -rf "$old"
   done
   state=$(mktemp -d "${TMPDIR:-/tmp}/bob-herdr.XXXXXX")
-  term=$HC_TERMINAL_ID
+  export BOB_HERDR_STATE="$state"
   (
     trap '' INT
     fresh=
@@ -166,9 +205,8 @@ if [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
     looks=$((${BOB_HERDR_READY_TIMEOUT:-600} * 2))
     while [ "$looks" -gt 0 ] && [ ! -e "$state/exited" ]; do
       looks=$((looks - 1))
-      # Without HC_TERMINAL_ID, hc acts for nobody. A look that fails says
-      # nothing about the screen.
-      if ! screen=$(env -u HC_TERMINAL_ID hc read "$term" --lines 40 2>/dev/null); then
+      # A look that fails says nothing about the screen.
+      if ! screen=$(look 2>/dev/null); then
         sleep 0.5
         continue
       fi
@@ -190,15 +228,9 @@ if [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
         fresh=1
       fi
       if [ -n "$asked" ] && [ "$found" != "$asked" ]; then
-        # Only our own report: a hook may have reported since. If the
-        # status cannot be read, the next look tries again.
-        if ! status=$(env -u HC_TERMINAL_ID hc get "$term" --json 2>/dev/null); then
-          sleep 0.5
-          continue
-        fi
-        case $status in
-          *"\"msg\":\"$msg\""*) report "state=clear" ;;
-        esac
+        # Only our own report: a hook may have reported since.
+        last_report
+        [ "$last" != "$sent" ] || report "state=clear"
         asked=
       fi
       case $found in
@@ -206,8 +238,9 @@ if [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
           if [ -z "$prompt" ] && bob_alive; then
             # Text typed before the input box was up may already be a
             # prompt: a hook's working or blocked report stays.
-            case $(env -u HC_TERMINAL_ID hc get "$term" --json 2>/dev/null) in
-              *'"app":"bob"'*'"state":"working"'* | *'"app":"bob"'*'"state":"blocked"'*) ;;
+            last_report
+            case $last in
+              state=working* | state=blocked*) ;;
               *) report "state=idle:app=bob" ;;
             esac
           fi
@@ -224,10 +257,19 @@ if [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
       esac
       if [ -n "$found" ] && [ "$found" != "$asked" ]; then
         bob_alive || exit 0
-        report "state=blocked:kind=$kind:app=bob:msg=$(printf '%s' "$msg" | base64 | tr -d '\n')"
+        sent="state=blocked:kind=$kind:app=bob:msg=$(printf '%s' "$msg" | base64 | tr -d '\n')"
+        report "$sent"
         asked=$found
       fi
-      sleep 0.5
+      # In Rex each look copies the block's whole scrollback. While a
+      # question waits on a person, look every 2.5 seconds, which counts as
+      # five looks against the timeout.
+      if [ -n "$asked" ] && [ "$terminal" = rex ]; then
+        sleep 2.5
+        looks=$((looks - 4))
+      else
+        sleep 0.5
+      fi
     done
   ) 2>/dev/null &
   helper=$!

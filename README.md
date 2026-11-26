@@ -19,6 +19,12 @@ It is written for the Herdr app and for
 terminals and provides the `hc` command. Herdr TUI, the original terminal
 app, is a separate program and is not covered.
 
+It also works in [Rex](https://superlogical.com/rex/), which reads OSC 7501
+too. In any other terminal that reads OSC 7501, set `BOB_HERDR_STATUS=1`:
+everything in the table below works there except idle at launch and the
+trust and sign-in questions, which the shim finds on Bob's screen through
+`hc` or `rex`.
+
 bob-herdr is unofficial and is not an IBM product.
 
 ## What works
@@ -69,7 +75,8 @@ it: finding Bob's input box, and finding its trust and sign-in questions.
   `PATH`, installed with `bun add -g @ibm/bob` or `npm install -g @ibm/bob`.
   Earlier versions do not take a first prompt as an argument, and `install`
   skips its hooks for them.
-- [herdr-core](https://herdr.dev/core/) (`hc`). The Herdr app is optional.
+- [herdr-core](https://herdr.dev/core/) (`hc`), or Rex with its `rex`
+  command on your `PATH`. The Herdr app is optional.
 - Node, which Bob also needs.
 - macOS 13 or later, or Linux. The scripts call `realpath`, which older macOS
   versions do not have.

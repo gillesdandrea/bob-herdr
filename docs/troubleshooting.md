@@ -7,9 +7,11 @@ runs, Bob's version and how many status hooks are in Bob's settings.
 
 Check these in order.
 
-1. **You are not in an hc terminal.** Reports go out only where
-   `HC_TERMINAL_ID` is set: a pane in the Herdr app, or a terminal started
-   with `hc run`.
+1. **You are not in an hc terminal or a Rex block.** Reports go out only
+   where `HC_TERMINAL_ID` is set (a pane in the Herdr app, or a terminal
+   started with `hc run`), or in a Rex block: see
+   [Settings](settings.md#what-is-reported) for how one is recognized. In
+   another terminal that reads OSC 7501, set `BOB_HERDR_STATUS=1`.
 2. **The folder is not trusted.** Bob runs none of its settings hooks in a
    folder you answered "Don't trust" for, so it never shows as working,
    blocked or done there.
@@ -38,6 +40,11 @@ when Bob exits.
 
 A Bob release may also have reworded its input box. Set
 `BOB_HERDR_READY_TEXT`: see [Settings](settings.md).
+
+In a Rex block, the shim reads Bob's screen with the `rex` command. If
+`command -v rex` prints nothing, the shim cannot see the screen: no idle at
+launch, and no trust or sign-in report. Put Rex's command folder on your
+`PATH`; in a Rex block, `REX_BIN_DIR` names it.
 
 ## The shim is not the bob that runs
 
