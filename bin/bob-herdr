@@ -5,9 +5,11 @@ set -eu
 # Bob's hooks: a submitted prompt is working, an approval prompt or a
 # question is blocked, a finished turn is done, `/clear` is idle. Idle at
 # launch comes from the shim: Bob runs its SessionStart hook before its input
-# box is ready, and also when it starts with a prompt. Bob runs `hook` on
-# every event and waits for it, so this runs before anything else here: it
-# starts no process when reports are off, and only node when they are on.
+# box is ready, and also when it starts with a prompt. The hook also reports
+# Bob's task for the terminal to resume (OSC 7577) when the shim left a
+# record for it. Bob runs `hook` on every event and waits for it, so this
+# runs before anything else here: it starts no process when there is nothing
+# to report, and only node when there is.
 # Bob's settings call this file by its own path, so a link is rare.
 if [ "${1:-}" = hook ]; then
   if [ -L "$0" ]; then self=$(realpath "$0"); else self=$0; fi
@@ -16,8 +18,12 @@ if [ "${1:-}" = hook ]; then
     *) lib=../lib ;;
   esac
   . "$lib/status.sh"
-  status_enabled || exit 0
-  exec node "$lib/hook.mjs"
+  status=
+  status_enabled && status=1
+  if [ -z "$status" ] && { [ -z "${BOB_HERDR_STATE:-}" ] || [ ! -s "$BOB_HERDR_STATE/resume" ]; }; then
+    exit 0
+  fi
+  exec node "$lib/hook.mjs" $status
 fi
 
 self=$(realpath "$0")
@@ -38,7 +44,7 @@ Commands:
               status hooks to Bob's settings, and add Bob to the Herdr app
   uninstall   Remove what install added
   status      Show what is installed and which bob runs
-  hook        Report a Bob hook event as OSC 7501 (Bob runs this)
+  hook        Report a Bob hook event as OSC 7501 and OSC 7577 (Bob runs this)
 EOF
 }
 
@@ -108,18 +114,24 @@ install() {
 
   # The shim must tell an option's value from a prompt. Bob's help lists
   # the options that take one, as `--mode <mode>`; an optional value, as in
-  # `--resume [task-id]`, is not one of them.
-  options=$({
+  # `--resume [task-id]`, is not one of them. Those that take none, as
+  # `--trust`, go on a second line.
+  help=$({
     bob --help
     bob chat --help
-  } 2>/dev/null |
+  } 2>/dev/null || :)
+  options=$(printf '%s\n' "$help" |
     sed -n -E 's/^ +(-[A-Za-z0-9]), (--[A-Za-z0-9][A-Za-z0-9-]*) <.*/\1 \2/p; s/^ +(--[A-Za-z0-9][A-Za-z0-9-]*) <.*/\1/p; s/^ +(-[A-Za-z0-9]) <.*/\1/p' |
     tr ' ' '\n' | sort -u | tr '\n' ' ')
   options=${options% }
+  flags=$(printf '%s\n' "$help" |
+    sed -n -E 's/^ +(-[A-Za-z0-9]), (--[A-Za-z0-9][A-Za-z0-9-]*)(  .*)?$/\1 \2/p; s/^ +(--[A-Za-z0-9][A-Za-z0-9-]*)(  .*)?$/\1/p' |
+    tr ' ' '\n' | sort -u | tr '\n' ' ')
+  flags=${flags% }
   if [ -n "$options" ]; then
     mkdir -p "$(dirname "$options_file")"
-    printf '%s\n' "$options" >"$options_file"
-    echo "Recorded Bob's options that take a value in $options_file"
+    printf '%s\n' "$options" "$flags" >"$options_file"
+    echo "Recorded Bob's options in $options_file"
   else
     echo "Kept the built-in list of Bob's options: bob --help listed none"
   fi
@@ -167,9 +179,9 @@ status() {
   done
   echo "bob runs: $(command -v bob 2>/dev/null || echo nothing)"
   if [ -s "$options_file" ]; then
-    echo "Bob's options that take a value: recorded in $options_file"
+    echo "Bob's options: recorded in $options_file"
   else
-    echo "Bob's options that take a value: built-in list"
+    echo "Bob's options: built-in list"
   fi
   if bob_too_old; then
     echo "Bob version: $bob_version (bob-herdr needs 2.1.0 or later)"

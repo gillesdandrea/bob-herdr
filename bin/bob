@@ -2,7 +2,9 @@
 # bob shim from bob-herdr. Runs the real Bob and, inside an hc terminal or a
 # Rex block: reports Bob's trust question and sign-in screen as `blocked`,
 # reports `idle` once Bob's input box is on screen, unless Bob starts with a
-# prompt (`bob "fix the tests"`), and clears the status on exit.
+# prompt (`bob "fix the tests"`), and clears the status on exit. In a
+# terminal that sets OSC7577_TOKEN, it also tells the terminal how to resume
+# Bob (the Program Resume Protocol, see lib/resume.mjs).
 
 self=$(realpath "$0")
 root=$(dirname "$(dirname "$self")")
@@ -40,6 +42,13 @@ real_bob() {
 
 bob=$(real_bob) || exit 127
 
+# The token stays in the shim's memory: Bob, its hooks and the commands it
+# runs do not get it, so only the shim can tell the terminal what to resume.
+# A BOB_HERDR_STATE from outside belongs to another Bob, one that runs this
+# one: this Bob must not report as that one.
+resume_token=${OSC7577_TOKEN:-}
+unset OSC7577_TOKEN BOB_HERDR_STATE
+
 # Help, version, a headless prompt and Bob's listings, anywhere before `--`,
 # run as they are.
 for arg do
@@ -51,27 +60,54 @@ for arg do
   esac
 done
 
-# Bob's options that take a value: those of Bob 2.1.0, and those that
-# `bob-herdr install` read from Bob's help.
+# Bob's options that take a value, and those that take none: those of Bob
+# 2.1.0, and those that `bob-herdr install` read from Bob's help, on the
+# first and second line of the file.
 value_options='--instance-id --workspace --config-dir --mode --max-cost --max-turns --log-level --team-id --disable-tool-groups'
+flag_options='--auto-approve --disable-mcp --disable-subagents --trust --accept-license'
 options_file=${BOB_HERDR_OPTIONS:-${XDG_CONFIG_HOME:-$HOME/.config}/bob-herdr/value-options}
-if [ -r "$options_file" ] && read -r recorded <"$options_file" && [ -n "$recorded" ]; then
-  value_options="$value_options $recorded"
+recorded=
+recorded_flags=
+if [ -r "$options_file" ]; then
+  {
+    read -r recorded
+    read -r recorded_flags
+  } <"$options_file" || :
 fi
+value_options="$value_options $recorded"
+flag_options="$flag_options $recorded_flags"
 
 # Bob gets its arguments as they are. The shim only checks what they hold.
 # Options and the values of the options above are skipped; after `--`,
 # nothing is an option. Bob reads the first remaining word as a command when
 # it names one, even after `--`: its headless and management commands run as
 # they are, and `chat` is not a prompt. Any other word is a prompt.
+#
+# The resume command is the shim, by the path it was started with, and the
+# options with their values: no prompt, which must not run twice, and no
+# `-r`, which the reports add with the current task. An option the shim does
+# not know may take the next word as its value, or not: the shim cannot tell
+# its value from the prompt, so it reports nothing.
 prompt=
 value=
 word=
 rest=
+resume_id=
+resume_argv=
+if [ -n "$resume_token" ]; then
+  case $0 in
+    /*) resume_argv=$(b64 "$0") ;;
+    *) resume_argv=$(b64 "$self") ;;
+  esac
+fi
+keep() {
+  [ -z "$resume_token" ] || resume_argv="$resume_argv,$(b64 "$1")"
+}
 for arg do
   if [ -z "$rest" ]; then
     if [ "$value" = 1 ]; then
       value=
+      keep "$arg"
       continue
     fi
     if [ "$value" = resume ]; then
@@ -79,12 +115,16 @@ for arg do
       # Bob reads the word after -r as a task id, unless it is an option.
       case $arg in
         -*) ;;
-        *) continue ;;
+        *)
+          resume_id=$arg
+          continue
+          ;;
       esac
     fi
     case " $value_options " in
       *" $arg "*)
         value=1
+        keep "$arg"
         continue
         ;;
     esac
@@ -97,7 +137,21 @@ for arg do
         value=resume
         continue
         ;;
-      -*) continue ;;
+      --resume=*)
+        resume_id=${arg#--resume=}
+        continue
+        ;;
+      -*=*)
+        keep "$arg"
+        continue
+        ;;
+      -*)
+        case " $flag_options " in
+          *" $arg "*) keep "$arg" ;;
+          *) resume_token= ;;
+        esac
+        continue
+        ;;
     esac
   fi
   [ -n "$arg" ] || continue
@@ -111,7 +165,9 @@ for arg do
   prompt=1
 done
 
-status_enabled || exec "$bob" "$@"
+status=
+status_enabled && status=1
+[ -n "$status" ] || [ -n "$resume_token" ] || exec "$bob" "$@"
 
 # A helper watches Bob's screen while Bob starts, looking about twice a
 # second until Bob's input box is up. It reads the screen with `hc read` in
@@ -188,16 +244,49 @@ case $terminal in
   hc) term=$HC_TERMINAL_ID ;;
   rex) term=$REX_BLOCK ;;
 esac
-if [ -n "$terminal" ] && command -v "$terminal" >/dev/null 2>&1; then
-  # Until Bob runs, Ctrl-C ends the shim: the helper must not outlive it.
-  trap 'stop_helper; exit 130' INT
+watch=
+[ -n "$status" ] && [ -n "$terminal" ] && command -v "$terminal" >/dev/null 2>&1 && watch=1
+# resume_send report [task id] | clear: an OSC 7577 report from the shim,
+# which owns the record, so it lives as long as Bob does. The token goes to
+# node on its stdin; printf is a shell builtin, so the token never shows in
+# the process list.
+resume_send() {
+  printf '%s\n' "$$" "$resume_argv" "$resume_cwd" "$resume_token" | node "$root/lib/resume.mjs" "$@"
+}
+# Bob's hooks write the task to resume, or an empty line for a fresh Bob, to
+# $state/task, and signal the shim, which reports it.
+resume_task() {
+  task=
+  { read -r task <"$state/task"; } 2>/dev/null || :
+  resume_send report "$task"
+}
+
+if [ -n "$watch" ] || [ -n "$resume_token" ]; then
+  # Until Bob runs, Ctrl-C ends the shim: the helper must not outlive it,
+  # and no record must outlive the shim.
+  trap '[ -z "$resume_token" ] || resume_send clear; stop_helper; exit 130' INT
   # A shim that was killed leaves its folder behind: remove the folders
-  # whose Bob is gone.
+  # whose shim, or whose Bob for an older shim, is gone.
   for old in "${TMPDIR:-/tmp}"/bob-herdr.*; do
-    [ -s "$old/pid" ] && read -r old_pid <"$old/pid" && ! kill -0 "$old_pid" 2>/dev/null && rm -rf "$old"
+    old_pid=
+    { read -r old_pid <"$old/resume" || read -r old_pid <"$old/pid"; } 2>/dev/null || continue
+    [ -n "$old_pid" ] && ! kill -0 "$old_pid" 2>/dev/null && rm -rf "$old"
   done
   state=$(mktemp -d "${TMPDIR:-/tmp}/bob-herdr.XXXXXX")
   export BOB_HERDR_STATE="$state"
+fi
+
+# The shim reports a fresh Bob, or the task given with -r, before Bob
+# starts; Bob's hooks hand it each task once Bob has one. $state/resume,
+# the shim's process id, tells the hooks where to send it.
+if [ -n "$resume_token" ]; then
+  resume_cwd=$(b64 "$PWD")
+  trap resume_task USR1
+  echo "$$" >"$state/resume"
+  resume_send report "$resume_id"
+fi
+
+if [ -n "$watch" ]; then
   (
     trap '' INT
     fresh=
@@ -286,14 +375,25 @@ exec 3<&-
 [ -z "$state" ] || echo "$bob_pid" >"$state/pid"
 
 # TERM and HUP for the shim go to Bob; the cleanup below runs once Bob exits.
-trap 'kill -TERM "$bob_pid" 2>/dev/null' TERM
-trap 'kill -HUP "$bob_pid" 2>/dev/null' HUP
+hangup=
+trap 'hangup=1; kill -TERM "$bob_pid" 2>/dev/null' TERM
+trap 'hangup=1; kill -HUP "$bob_pid" 2>/dev/null' HUP
 while :; do
   wait "$bob_pid"
   rc=$?
   kill -0 "$bob_pid" 2>/dev/null || break
 done
+trap '' USR1
 
+# The resume record goes when you end Bob. A hangup or a TERM, for Bob or
+# the shim, means the terminal is going away, which is when it needs the
+# record.
+if [ -n "$resume_token" ] && [ -z "$hangup" ]; then
+  case $rc in
+    129 | 143) ;;
+    *) resume_send clear ;;
+  esac
+fi
 stop_helper
-report "state=clear"
+[ -z "$status" ] || report "state=clear"
 exit $rc

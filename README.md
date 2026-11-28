@@ -12,7 +12,8 @@ cannot tell what it is doing.
 
 bob-herdr sends the status for Bob, through Bob's hooks and a shim: a small
 script that stands in for the `bob` command and runs the real one. It also
-adds Bob to the app's **Start an agent** menu.
+adds Bob to the app's **Start an agent** menu, and tells the terminal how to
+bring Bob back, on its task, after the terminal restarts.
 
 It is written for the Herdr app and for
 [herdr-core](https://herdr.dev/core/), the server that runs the app's
@@ -65,6 +66,34 @@ screen. See [Drive Bob with hc](docs/driving-bob.md).
 
 bob-herdr has been run on macOS only. Linux is untested.
 
+## Resume after a restart
+
+A terminal that supports the
+[Program Resume Protocol](https://superlogical.com/rex/docs/build/program-resume)
+(OSC 7577) can start a program again after the terminal restarts, for an
+update, a crash or a reboot. It sets `OSC7577_TOKEN` for the programs it
+starts, and bob-herdr reports to it whenever that variable is set, whatever
+`BOB_HERDR_STATUS` says.
+
+| When Bob | The terminal would run |
+|---|---|
+| starts, or runs `/clear` or `/new` | `bob` with your options |
+| has a task: after its first prompt, or once you pick one with `-r` | `bob` with your options and `-r <task id>` |
+| exits because you quit it | nothing: the record is removed |
+| is ended by the terminal closing or restarting | the last command above |
+
+`bob` here is the shim, by the path it was started with, so the resumed Bob
+reports its status too. Your options are kept, such as `--mode plan`; a
+prompt is not, so it never runs twice. The working directory is Bob's.
+
+The terminal decides whether and when to resume; bob-herdr only reports.
+Bob and the commands it runs do not get `OSC7577_TOKEN`: a command Bob runs
+can at most change which task the record names, never the command.
+
+bob-herdr reports nothing for a Bob started with an option it does not
+know, because it cannot tell that option's value from a prompt. Run
+`install` again after an update of Bob.
+
 Two parts depend on text that Bob prints, and break if a Bob release changes
 it: finding Bob's input box, and finding its trust and sign-in questions.
 [Settings](docs/settings.md) lists the variables that adjust them.
@@ -96,8 +125,8 @@ options afresh.
    [Troubleshooting](docs/troubleshooting.md#the-shim-is-not-the-bob-that-runs).
 2. It adds seven hook entries to `~/.bob/settings/settings.json`. Your other
    hooks stay as they are.
-3. It records which of Bob's options take a value, read from `bob --help`,
-   in `~/.config/bob-herdr/value-options`, or under `$XDG_CONFIG_HOME` when
+3. It records which of Bob's options take a value and which take none,
+   read from `bob --help`, in `~/.config/bob-herdr/value-options`, or under `$XDG_CONFIG_HOME` when
    that is set.
 4. If the Herdr app is installed, it adds a `bob` entry to
    `~/.config/herdr-app/programs.json` and copies an icon to
