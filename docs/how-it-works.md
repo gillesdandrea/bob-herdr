@@ -86,19 +86,64 @@ option, or the name of one of Bob's commands.
 
 `install` reads the options that take a value from `bob --help` and
 `bob chat --help`, and records them in `~/.config/bob-herdr/value-options`,
-or under `$XDG_CONFIG_HOME` when that is set. The shim adds them to the
+or under `$XDG_CONFIG_HOME` when that is set. A second line holds the
+options that take none, which the resume command needs. The shim adds them to the
 options of Bob 2.1.0, which it carries itself. If a later Bob adds such an
 option before you run `install` again, the shim takes its value for a prompt
 and does not report idle. Writing the option as `--option=value` avoids
 that.
+
+## Resume
+
+In a terminal that sets `OSC7577_TOKEN`, bob-herdr reports how to resume Bob
+as [OSC 7577](https://superlogical.com/rex/docs/build/program-resume), the
+Program Resume Protocol. Each report carries the command, Bob's working
+directory, the shim's process id, the time, and a SHA-256 hash of the report
+and the token. The terminal holds one record per process id and drops it
+when that process exits on its own.
+
+The shim takes the token out of the environment before it starts Bob and
+keeps it in its own memory, so only the shim reports. It reports a fresh
+Bob, or the task given with `-r`, before Bob starts. Bob's hooks then hand
+it the task: they write it to `BOB_HERDR_STATE/task` and send the shim
+`SIGUSR1`, and the shim reports it.
+
+| Bob event | Report |
+|---|---|
+| `SessionStart` on `resume` or `compact` | the task |
+| `SessionStart` on `clear` (`/clear`, `/new`) | a fresh Bob |
+| `UserPromptSubmit` | the task |
+
+A new task gets no report until its first prompt: `bob -r` cannot open a
+task that has none. A task id that is not letters, digits, `_` and `-`
+removes the record. So a command Bob runs, which can write that file too,
+can change the task the record names or remove it, but not the command.
+
+The shim also drops a `BOB_HERDR_STATE` it inherits: that one belongs to a
+Bob that started this one, such as a `bob -p` run as a tool, and this Bob's
+hooks must not report as that Bob.
+
+If you press Ctrl-C before Bob starts, the shim removes the record.
+
+When Bob exits, the shim removes the record, unless the shim or Bob got a
+hangup or a TERM, which is what they get when the terminal closes or
+restarts. A command that the protocol cannot carry, such as an option value
+with a newline, or one longer than 2048 bytes or 64 arguments, removes the
+record instead.
+
+The command is the shim, by the path it was started with, then Bob's options
+and their values as you gave them, without `-r` and its task id, `chat`, and
+the prompt. An option the shim does not know, as either taking a value or
+not, may take the next word as its value: the shim then reports nothing,
+since it cannot tell that value from a prompt.
 
 ## What install writes
 
 | Change | Where |
 |---|---|
 | Links to `bob-herdr` and the shim | `~/.local/bin` |
-| Seven hook entries; your other hooks stay | `~/.bob/settings/settings.json` |
-| Bob's options that take a value | `~/.config/bob-herdr/value-options` |
+| Seven hook entries; your other hooks stay. `SessionStart` matches `clear`, `resume` and `compact` | `~/.bob/settings/settings.json` |
+| Bob's options: those that take a value, then those that take none | `~/.config/bob-herdr/value-options` |
 | A `bob` entry and an icon, when the Herdr app is installed | `~/.config/herdr-app/programs.json` and `~/.config/herdr-app/bob-herdr/` |
 
 The app entry starts the shim by its full path, because the app starts

@@ -39,5 +39,5 @@ The input box line of Bob 2.1.0 reads
 |---|---|---|
 | `BOB_HERDR_BIN_DIR` | `~/.local/bin` | Where `install` creates the links |
 | `BOB_HERDR_BOB_SETTINGS` | `~/.bob/settings/settings.json` | The Bob settings file that `install` edits |
-| `BOB_HERDR_OPTIONS` | `~/.config/bob-herdr/value-options`, under `$XDG_CONFIG_HOME` when that is set | The file that holds Bob's options that take a value. `install` overwrites it and `uninstall` deletes it. The shim reads it too, so set it for both. |
+| `BOB_HERDR_OPTIONS` | `~/.config/bob-herdr/value-options`, under `$XDG_CONFIG_HOME` when that is set | The file that holds Bob's options: those that take a value on its first line, those that take none on its second. `install` overwrites it and `uninstall` deletes it. The shim reads it too, so set it for both. |
 | `BOB_HERDR_APP_HOME` | `~/.config/herdr-app` | The Herdr app folder that `install` edits |

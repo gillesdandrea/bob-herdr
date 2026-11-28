@@ -31,6 +31,11 @@ status_enabled() {
   [ -n "$terminal" ]
 }
 
+# Standard base64 of one argument, on one line.
+b64() {
+  printf '%s' "$1" | base64 | tr -d '\n'
+}
+
 # report <pairs>, e.g. report state=working:app=bob. Written to the terminal
 # itself: Bob captures a hook's stdout and feeds it to the model. Under the
 # shim, the pairs are also kept in $BOB_HERDR_STATE/last, so the shim knows
